@@ -1,36 +1,89 @@
-# Dev Setup
+# CookAlong TV — Development Setup
 
 ## Prerequisites
 
-- Node.js 18+ (or 20 LTS)
-- Amazon Developer account (https://developer.amazon.com)
-- Fire TV device or Fire TV App Tester
+- Node.js **>= 18** (for the engines, tests and skill)
+- A modern browser for the web app (Chrome / Firefox / Edge)
+- (Optional) `npx` for the `serve` script
 
-## 1. Recipe engine
+## Install
 
 ```bash
-npm install
-npm start
+git clone https://github.com/ABin-Huang/cookalong-tv.git
+cd cookalong-tv
+npm install        # optional: no runtime deps for core; installs tooling if added
 ```
 
-Serves `http://localhost:3000`. Endpoints:
+There are **no runtime dependencies** for the core engines and the web app —
+everything runs on plain Node.js and the browser. The only dependency package
+(`ask-sdk-core`) is used when deploying the Alexa skill.
 
-- `GET /recipes` — list recipes
-- `GET /recipes/:id` — recipe detail with steps
-- `POST /sessions` — start a cooking session
-- `POST /sessions/:id/transition` — `{ action: "next" | "previous" | "repeat" | "start_timer" | "stop_timer" }`
+## Run the web app
 
-## 2. Fire TV app
+```bash
+npm start          # python3 -m http.server 8080 --directory public
+```
 
-Open **Fire TV App Tester** → load `app/index.html` as a Web App. The app reads session state from the engine and renders the current step card. Remote DPAD: up/down to navigate within a step, Select to advance.
+Then open http://localhost:8080.
 
-## 3. Alexa skill
+Or, to test the UI as a local file: open `public/index.html` directly in a
+browser (data is bundled in `public/recipes-data.js`, so no server is strictly
+required).
 
-- Use the ASK CLI or the Alexa Developer Console to deploy `skill/`.
-- Link the skill to the same recipe-engine endpoint via the skill backend (`skill/handlers.js`).
-- Test with the Alexa simulator: "Alexa, open cook along" then "Alexa, next step".
+### What to try
 
-## Notes
+- Filter recipes by **Vegetarian / Vegan / Gluten-free** chips.
+- Open a recipe → follow steps with **Previous / Next** (or Arrow keys).
+- Click **Set timer** → Start / Pause / Reset.
 
-- Voice-first means every screen element must also be reachable by voice; keep labels short and unambiguous.
-- 10-foot UI: minimum readable font size ≈ 24px at 1080p, high contrast, minimal chrome.
+## Run the tests
+
+```bash
+npm test
+```
+
+Covers the recipe engine (listing, filtering, step formatting) and the timer
+engine (duration parsing, timer lifecycle).
+
+## Alexa skill (optional, for device testing)
+
+1. Install dependencies in `skill/`:
+
+   ```bash
+   cd skill && npm install
+   ```
+
+2. In the **Alexa Developer Console**, create a custom skill and import
+   `skill/skill.json`; upload `skill/models/en-US.json` as the interaction
+   model (invocation name **cook along**).
+
+3. Create a Lambda function (Node.js 18), upload `skill/` as the code, and set
+   the skill endpoint to the Lambda ARN.
+
+4. Test in the console simulator:
+
+   - "open cook along"
+   - "cook tomato basil pasta"
+   - "next step"
+   - "set a timer for 5 minutes"
+
+## Project layout
+
+```
+cookalong-tv/
+├── public/            # Fire TV Web App (front-end)
+├── skill/             # Alexa skill (back-end / Lambda)
+├── src/               # shared engines (recipes, timer)
+├── test/              # unit tests
+├── docs/              # architecture & setup docs
+└── README.md
+```
+
+## Troubleshooting
+
+- **Port 8080 busy**: change the port in `package.json` (`npm start`) or use
+  `npm run serve` with `-l <port>`.
+- **Tests not found**: run `node --test` from the repo root (auto-discovers
+  `test/`).
+- **Skill won't deploy**: ensure `ask-sdk-core` is installed inside `skill/`
+  and the Lambda runtime is Node.js 18+.

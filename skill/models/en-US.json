@@ -1,0 +1,119 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "cook along",
+      "intents": [
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        },
+        {
+          "name": "StartCookingIntent",
+          "slots": [
+            {
+              "name": "recipe",
+              "type": "RECIPE"
+            }
+          ],
+          "samples": [
+            "cook {recipe}",
+            "start cooking {recipe}",
+            "let's make {recipe}",
+            "I want to cook {recipe}"
+          ]
+        },
+        {
+          "name": "NextStepIntent",
+          "slots": [],
+          "samples": [
+            "next step",
+            "next",
+            "what's next",
+            "continue",
+            "okay next"
+          ]
+        },
+        {
+          "name": "RepeatStepIntent",
+          "slots": [],
+          "samples": [
+            "repeat step",
+            "say that again",
+            "what step am I on",
+            "repeat that"
+          ]
+        },
+        {
+          "name": "SetTimerIntent",
+          "slots": [
+            {
+              "name": "duration",
+              "type": "AMAZON.DURATION"
+            }
+          ],
+          "samples": [
+            "set a timer for {duration}",
+            "start a {duration} timer",
+            "timer for {duration}",
+            "set timer {duration}"
+          ]
+        },
+        {
+          "name": "CancelTimerIntent",
+          "slots": [],
+          "samples": [
+            "cancel the timer",
+            "stop the timer",
+            "cancel timer"
+          ]
+        },
+        {
+          "name": "DietFilterIntent",
+          "slots": [
+            {
+              "name": "diet",
+              "type": "DIET"
+            }
+          ],
+          "samples": [
+            "what can I make that is {diet}",
+            "show me {diet} recipes",
+            "filter by {diet}",
+            "I want {diet} food"
+          ]
+        }
+      ],
+      "types": [
+        {
+          "name": "RECIPE",
+          "values": [
+            { "name": { "value": "tomato basil pasta" } },
+            { "name": { "value": "vegetable stir fry" } },
+            { "name": { "value": "garlic chicken rice" } },
+            { "name": { "value": "fluffy french toast" } }
+          ]
+        },
+        {
+          "name": "DIET",
+          "values": [
+            { "name": { "value": "vegetarian" } },
+            { "name": { "value": "vegan" } },
+            { "name": { "value": "gluten-free" } }
+          ]
+        }
+      ]
+    }
+  }
+}
