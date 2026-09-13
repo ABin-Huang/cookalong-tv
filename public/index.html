@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>CookAlong TV</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <!-- 10-foot UI: optimized for Fire TV / large screens, high contrast, big text -->
+  <header id="topbar">
+    <h1 class="logo">🍳 CookAlong <span>TV</span></h1>
+    <div id="voice-status" class="voice-status" aria-live="polite">
+      <span class="pulse"></span> Say "Alexa, open CookAlong" — or just use the remote
+    </div>
+  </header>
+
+  <main id="view-home" class="view">
+    <section id="filters" class="filters">
+      <button class="chip active" data-diet="any">All recipes</button>
+      <button class="chip" data-diet="vegetarian">Vegetarian</button>
+      <button class="chip" data-diet="vegan">Vegan</button>
+      <button class="chip" data-diet="gluten-free">Gluten-free</button>
+    </section>
+    <section id="recipe-grid" class="grid" aria-label="Recipe list"></section>
+  </main>
+
+  <main id="view-recipe" class="view hidden">
+    <button id="btn-back" class="btn-back">← All recipes</button>
+    <h2 id="recipe-title"></h2>
+    <p id="recipe-meta" class="meta"></p>
+
+    <section id="step-card" class="step-card">
+      <div class="step-number" id="step-label">Step 1</div>
+      <p id="step-text" class="step-text"></p>
+    </section>
+
+    <div class="controls">
+      <button id="btn-prev" class="btn">◀ Previous</button>
+      <button id="btn-timer" class="btn primary">⏱ Set timer 5:00</button>
+      <button id="btn-next" class="btn">Next ▶</button>
+    </div>
+
+    <div id="timer-display" class="timer hidden">
+      <div id="timer-time" class="timer-time">05:00</div>
+      <div class="timer-controls">
+        <button id="btn-timer-start" class="btn small">Start</button>
+        <button id="btn-timer-pause" class="btn small">Pause</button>
+        <button id="btn-timer-reset" class="btn small">Reset</button>
+      </div>
+    </div>
+  </main>
+
+  <footer id="footer">CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</footer>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="recipes-data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

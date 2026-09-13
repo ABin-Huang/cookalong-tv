@@ -1,0 +1,14 @@
+{
+  "name": "cookalong-tv-skill",
+  "version": "1.0.0",
+  "description": "Alexa Skills Kit skill for CookAlong TV",
+  "main": "index.js",
+  "scripts": {
+    "test": "node --test ../test/"
+  },
+  "dependencies": {
+    "ask-sdk-core": "^2.14.0",
+    "ask-sdk-model": "^1.53.0"
+  },
+  "license": "MIT"
+}

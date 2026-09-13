@@ -1,0 +1,34 @@
+{
+  "manifest": {
+    "publishingInformation": {
+      "locales": {
+        "en-US": {
+          "summary": "CookAlong TV - hands-free step-by-step cooking on Fire TV",
+          "examplePhrases": [
+            "Alexa, open cook along",
+            "Alexa, ask cook along to cook tomato basil pasta",
+            "Alexa, ask cook along to set a timer for 5 minutes"
+          ],
+          "keywords": ["cooking", "recipes", "fire tv", "timer", "alexa"]
+        }
+      },
+      "isAvailableWorldwide": true,
+      "category": "FOOD_AND_DRINK"
+    },
+    "apis": {
+      "custom": {
+        "endpoint": {
+          "sourceDir": "."
+        }
+      }
+    },
+    "permissions": [],
+    "privacyAndCompliance": {
+      "allowsPurchases": false,
+      "isExportCompliant": true,
+      "containsAds": false,
+      "isChildDirected": false,
+      "usesPersonalInfo": false
+    }
+  }
+}
