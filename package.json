@@ -1,15 +1,23 @@
 {
   "name": "cookalong-tv",
-  "version": "0.1.0",
-  "description": "Voice-first interactive cooking companion for Amazon Fire TV with Alexa+ integration.",
-  "main": "server/index.js",
+  "version": "1.0.0",
+  "description": "CookAlong TV - Voice-first interactive cooking companion for Amazon Fire TV with Alexa+ integration",
+  "main": "skill/index.js",
   "scripts": {
-    "start": "node server/index.js"
+    "test": "node --test",
+    "serve": "npx serve public -l 8080",
+    "start": "python3 -m http.server 8080 --directory public"
   },
-  "keywords": ["firetv", "alexa", "cooking", "voice", "smart-tv"],
+  "keywords": [
+    "fire-tv",
+    "alexa",
+    "alexa-plus",
+    "cooking",
+    "voice-assistant",
+    "nodejs"
+  ],
   "license": "MIT",
-  "dependencies": {
-    "express": "^4.19.0",
-    "ask-sdk": "^2.12.0"
+  "engines": {
+    "node": ">=18"
   }
 }
