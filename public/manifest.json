@@ -1,0 +1,17 @@
+{
+  "name": "CookAlong TV",
+  "short_name": "CookAlong",
+  "description": "Hands-free interactive cooking companion for Amazon Fire TV with Alexa+ voice control.",
+  "start_url": "index.html",
+  "display": "standalone",
+  "background_color": "#101418",
+  "theme_color": "#ff8c42",
+  "icons": [
+    {
+      "src": "icon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
