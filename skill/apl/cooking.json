@@ -1,0 +1,90 @@
+{
+  "type": "APL",
+  "version": "1.9",
+  "theme": "dark",
+  "mainTemplate": {
+    "parameters": ["payload"],
+    "items": [
+      {
+        "type": "Frame",
+        "id": "cookingRoot",
+        "width": "100%",
+        "height": "100%",
+        "backgroundColor": "#0b0f14",
+        "paddingLeft": 80,
+        "paddingRight": 80,
+        "paddingTop": 60,
+        "paddingBottom": 60,
+        "item": {
+          "type": "Container",
+          "width": "100%",
+          "height": "100%",
+          "justifyContent": "spaceBetween",
+          "items": [
+            {
+              "type": "Container",
+              "items": [
+                {
+                  "type": "Text",
+                  "text": "${payload.cookalongData.properties.recipeName}",
+                  "fontSize": 32,
+                  "color": "#ff8c42",
+                  "letterSpacing": 1
+                },
+                {
+                  "type": "Text",
+                  "text": "${payload.cookalongData.properties.stepLabel}",
+                  "fontSize": 28,
+                  "fontWeight": 700,
+                  "color": "#9fb0c0",
+                  "spacing": 6
+                }
+              ]
+            },
+            {
+              "type": "ScrollView",
+              "width": "100%",
+              "height": "58%",
+              "item": {
+                "type": "Text",
+                "id": "stepText",
+                "text": "${payload.cookalongData.properties.stepText}",
+                "fontSize": 54,
+                "lineHeight": 1.35,
+                "fontWeight": 500,
+                "color": "#ffffff"
+              }
+            },
+            {
+              "type": "Container",
+              "width": "100%",
+              "items": [
+                {
+                  "type": "Frame",
+                  "width": "100%",
+                  "height": 14,
+                  "borderRadius": 7,
+                  "backgroundColor": "#222b36",
+                  "item": {
+                    "type": "Frame",
+                    "width": "${payload.cookalongData.properties.progress * 100}%",
+                    "height": 14,
+                    "borderRadius": 7,
+                    "backgroundColor": "#ff8c42"
+                  }
+                },
+                {
+                  "type": "Text",
+                  "text": "${payload.cookalongData.properties.hint}",
+                  "fontSize": 26,
+                  "color": "#78889a",
+                  "spacing": 20
+                }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

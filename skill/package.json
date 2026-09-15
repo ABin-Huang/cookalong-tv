@@ -1,13 +1,15 @@
 {
   "name": "cookalong-tv-skill",
-  "version": "1.0.0",
-  "description": "Alexa Skills Kit skill for CookAlong TV",
+  "version": "2.0.0",
+  "description": "Alexa Skills Kit skill for CookAlong TV (Fire TV APL + ingredient-aware cooking)",
   "main": "index.js",
   "scripts": {
-    "test": "node --test ../test/"
+    "test": "node --test ../test/",
+    "bundle": "node scripts/bundle.js"
   },
   "dependencies": {
     "ask-sdk-core": "^2.14.0",
+    "ask-sdk-dynamodb-persistence-adapter": "^2.14.0",
     "ask-sdk-model": "^1.53.0"
   },
   "license": "MIT"

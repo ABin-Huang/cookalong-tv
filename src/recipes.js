@@ -10,7 +10,9 @@
  * Ingredient shape:
  *   { name: "grated parmesan", canonical: "cheese", qty: "40g",
  *     role: "main" | "secondary" | "seasoning", pantry?: true }
- * A recipe may override global swaps via `substitutions: { canonical: {name,note} }`.
+ * A recipe may override global swaps via `substitutions`, whose options are
+ * diet/allergen-tagged and ordered best-first:
+ *   { canonical: [{ name, note, diet: ["vegan",...], allergens: [] }] }
  */
 
 const DIETS = ["vegetarian", "vegan", "gluten-free"];
@@ -135,7 +137,12 @@ const RECIPES = [
       { name: "black pepper", canonical: "black-pepper", qty: "to taste", role: "seasoning", pantry: true }
     ],
     substitutions: {
-      "vegetable-stock": { name: "chicken stock", note: "Same amount; it works beautifully in risotto." }
+      // This is a vegetarian dish: plant-based candidates first, tagged so
+      // the engine never offers chicken stock to a vegetarian cook.
+      "vegetable-stock": [
+        { name: "mushroom stock", note: "Same amount; it deepens the risotto's umami.", diet: ["vegan", "vegetarian", "gluten-free", "dairy-free"], allergens: [] },
+        { name: "chicken stock", note: "Same amount; it works beautifully in risotto.", diet: ["gluten-free", "dairy-free"], allergens: [] }
+      ]
     },
     steps: [
       "Warm 600ml of vegetable stock in a small pot and keep it at a gentle simmer.",

@@ -3,48 +3,32 @@
     "languageModel": {
       "invocationName": "cook along",
       "intents": [
-        {
-          "name": "AMAZON.CancelIntent",
-          "samples": []
-        },
-        {
-          "name": "AMAZON.HelpIntent",
-          "samples": []
-        },
-        {
-          "name": "AMAZON.StopIntent",
-          "samples": []
-        },
-        {
-          "name": "AMAZON.FallbackIntent",
-          "samples": []
-        },
+        { "name": "AMAZON.CancelIntent", "samples": [] },
+        { "name": "AMAZON.HelpIntent", "samples": [] },
+        { "name": "AMAZON.StopIntent", "samples": [] },
+        { "name": "AMAZON.FallbackIntent", "samples": [] },
+        { "name": "AMAZON.YesIntent", "samples": ["yes", "yep", "sure", "okay do it", "let's cook it", "start it"] },
+        { "name": "AMAZON.NoIntent", "samples": ["no", "nope", "not that one", "show me something else"] },
+
         {
           "name": "StartCookingIntent",
-          "slots": [
-            {
-              "name": "recipe",
-              "type": "RECIPE"
-            }
-          ],
+          "slots": [{ "name": "recipe", "type": "RECIPE" }],
           "samples": [
             "cook {recipe}",
             "start cooking {recipe}",
             "let's make {recipe}",
             "I want to cook {recipe}",
+            "I want to make {recipe}",
+            "how do I make {recipe}",
             "cook it",
             "cook this one",
-            "let's cook this"
+            "let's cook this",
+            "start the recipe"
           ]
         },
         {
           "name": "WhatDoIHaveIntent",
-          "slots": [
-            {
-              "name": "ingredients",
-              "type": "AMAZON.SearchQuery"
-            }
-          ],
+          "slots": [{ "name": "ingredients", "type": "AMAZON.SearchQuery" }],
           "samples": [
             "i have {ingredients}",
             "i've got {ingredients}",
@@ -52,7 +36,9 @@
             "what can i make with {ingredients}",
             "what can i cook with {ingredients}",
             "find recipes using {ingredients}",
-            "recipes with {ingredients}"
+            "recipes with {ingredients}",
+            "match recipes for {ingredients}",
+            "what should i cook with {ingredients}"
           ]
         },
         {
@@ -63,43 +49,38 @@
             "next option",
             "another one",
             "show me more options",
-            "anything else"
+            "anything else",
+            "other recipes",
+            "next recipe"
           ]
         },
         {
           "name": "SubstituteIntent",
-          "slots": [
-            {
-              "name": "ingredient",
-              "type": "INGREDIENT"
-            }
-          ],
+          "slots": [{ "name": "ingredient", "type": "INGREDIENT" }],
           "samples": [
             "i don't have {ingredient}",
             "i do not have {ingredient}",
             "no {ingredient}",
             "i'm out of {ingredient}",
+            "i am out of {ingredient}",
             "substitute {ingredient}",
             "replace {ingredient}",
             "what can replace {ingredient}",
-            "what can i use instead of {ingredient}"
+            "what can i use instead of {ingredient}",
+            "swap {ingredient}"
           ]
         },
         {
           "name": "ExcludeIngredientIntent",
-          "slots": [
-            {
-              "name": "ingredient",
-              "type": "INGREDIENT"
-            }
-          ],
+          "slots": [{ "name": "ingredient", "type": "INGREDIENT" }],
           "samples": [
             "without {ingredient}",
             "exclude {ingredient}",
             "i hate {ingredient}",
             "i don't like {ingredient}",
             "no {ingredient} please",
-            "nothing with {ingredient}"
+            "nothing with {ingredient}",
+            "i dislike {ingredient}"
           ]
         },
         {
@@ -110,7 +91,9 @@
             "next",
             "what's next",
             "continue",
-            "okay next"
+            "okay next",
+            "keep going",
+            "move on"
           ]
         },
         {
@@ -119,47 +102,67 @@
           "samples": [
             "repeat step",
             "say that again",
-            "what step am I on",
-            "repeat that"
+            "what step am i on",
+            "repeat that",
+            "repeat",
+            "go back a step"
           ]
         },
         {
           "name": "SetTimerIntent",
-          "slots": [
-            {
-              "name": "duration",
-              "type": "AMAZON.DURATION"
-            }
-          ],
+          "slots": [{ "name": "duration", "type": "AMAZON.DURATION" }],
           "samples": [
             "set a timer for {duration}",
             "start a {duration} timer",
             "timer for {duration}",
-            "set timer {duration}"
+            "set timer {duration}",
+            "count down {duration}"
           ]
         },
         {
           "name": "CancelTimerIntent",
           "slots": [],
-          "samples": [
-            "cancel the timer",
-            "stop the timer",
-            "cancel timer"
-          ]
+          "samples": ["cancel the timer", "stop the timer", "cancel timer"]
         },
         {
           "name": "DietFilterIntent",
-          "slots": [
-            {
-              "name": "diet",
-              "type": "DIET"
-            }
-          ],
+          "slots": [{ "name": "diet", "type": "DIET" }],
           "samples": [
             "what can I make that is {diet}",
             "show me {diet} recipes",
             "filter by {diet}",
-            "I want {diet} food"
+            "I want {diet} food",
+            "browse {diet}"
+          ]
+        },
+        {
+          "name": "SetProfileIntent",
+          "slots": [
+            { "name": "diet", "type": "DIET_PROFILE" },
+            { "name": "allergen", "type": "ALLERGEN" }
+          ],
+          "samples": [
+            "i am {diet}",
+            "i'm {diet}",
+            "make everything {diet}",
+            "my diet is {diet}",
+            "i eat {diet}",
+            "i am allergic to {allergen}",
+            "i'm allergic to {allergen}",
+            "i have a {allergen} allergy",
+            "avoid {allergen}",
+            "no {allergen} for me"
+          ]
+        },
+        {
+          "name": "ClearProfileIntent",
+          "slots": [],
+          "samples": [
+            "reset my preferences",
+            "clear my diet",
+            "i'm not vegan anymore",
+            "remove my allergy settings",
+            "forget my dietary preferences"
           ]
         }
       ],
@@ -171,12 +174,12 @@
             { "name": { "value": "vegetable stir fry" } },
             { "name": { "value": "garlic chicken rice" } },
             { "name": { "value": "fluffy french toast" } },
-            { "name": { "value": "creamy mushroom risotto" } },
-            { "name": { "value": "turmeric tofu scramble" } },
-            { "name": { "value": "beef and broccoli" } },
-            { "name": { "value": "banana oat pancakes" } },
-            { "name": { "value": "lemon garlic shrimp" } },
-            { "name": { "value": "hearty chicken soup" } }
+            { "name": { "value": "creamy mushroom risotto" }, "synonyms": ["mushroom risotto", "risotto"] },
+            { "name": { "value": "turmeric tofu scramble" }, "synonyms": ["tofu scramble"] },
+            { "name": { "value": "beef and broccoli" }, "synonyms": ["beef broccoli", "broccoli beef"] },
+            { "name": { "value": "banana oat pancakes" }, "synonyms": ["oat pancakes", "pancakes"] },
+            { "name": { "value": "lemon garlic shrimp" }, "synonyms": ["garlic shrimp"] },
+            { "name": { "value": "hearty chicken soup" }, "synonyms": ["chicken soup"] }
           ]
         },
         {
@@ -184,7 +187,30 @@
           "values": [
             { "name": { "value": "vegetarian" } },
             { "name": { "value": "vegan" } },
-            { "name": { "value": "gluten-free" } }
+            { "name": { "value": "gluten-free" }, "synonyms": ["gluten free", "no gluten"] }
+          ]
+        },
+        {
+          "name": "DIET_PROFILE",
+          "values": [
+            { "name": { "value": "vegan" } },
+            { "name": { "value": "vegetarian" } },
+            { "name": { "value": "gluten-free" }, "synonyms": ["gluten free"] },
+            { "name": { "value": "dairy-free" }, "synonyms": ["dairy free", "lactose free", "no dairy"] }
+          ]
+        },
+        {
+          "name": "ALLERGEN",
+          "values": [
+            { "name": { "value": "dairy" }, "synonyms": ["milk", "lactose"] },
+            { "name": { "value": "egg" }, "synonyms": ["eggs"] },
+            { "name": { "value": "gluten" }, "synonyms": ["wheat"] },
+            { "name": { "value": "shellfish" }, "synonyms": ["shrimp", "prawn", "crab", "lobster"] },
+            { "name": { "value": "fish" } },
+            { "name": { "value": "soy" }, "synonyms": ["soya"] },
+            { "name": { "value": "nuts" }, "synonyms": ["tree nuts", "almonds"] },
+            { "name": { "value": "peanut" }, "synonyms": ["peanuts"] },
+            { "name": { "value": "sesame" } }
           ]
         },
         {
@@ -219,7 +245,24 @@
             { "name": { "value": "honey" } },
             { "name": { "value": "maple syrup" } },
             { "name": { "value": "chicken stock" }, "synonyms": ["chicken broth"] },
-            { "name": { "value": "vegetable stock" }, "synonyms": ["vegetable broth"] }
+            { "name": { "value": "vegetable stock" }, "synonyms": ["vegetable broth"] },
+            { "name": { "value": "olive oil" } },
+            { "name": { "value": "sesame oil" } },
+            { "name": { "value": "soy sauce" } },
+            { "name": { "value": "rice vinegar" } }
+          ]
+        }
+      ]
+    },
+    "dialog": {
+      "intents": [
+        {
+          "name": "SetProfileIntent",
+          "confirmationRequired": false,
+          "prompts": {},
+          "slots": [
+            { "name": "diet", "type": "DIET_PROFILE", "confirmationRequired": false, "elicitationRequired": false, "prompts": {} },
+            { "name": "allergen", "type": "ALLERGEN", "confirmationRequired": false, "elicitationRequired": false, "prompts": {} }
           ]
         }
       ]

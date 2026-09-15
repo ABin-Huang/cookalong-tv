@@ -54,6 +54,32 @@
           <span class="haves-label">My kitchen:</span>
           <div id="pantry-haves" class="haves"></div>
         </div>
+        <div class="profile-box">
+          <div class="profile-line">
+            <span class="profile-label">My diet:</span>
+            <div class="profile-chips" id="diet-chips" role="group" aria-label="Dietary preferences">
+              <button class="chip pchip" data-kind="diets" data-value="vegan">Vegan</button>
+              <button class="chip pchip" data-kind="diets" data-value="vegetarian">Vegetarian</button>
+              <button class="chip pchip" data-kind="diets" data-value="gluten-free">Gluten-free</button>
+              <button class="chip pchip" data-kind="diets" data-value="dairy-free">Dairy-free</button>
+            </div>
+          </div>
+          <div class="profile-line">
+            <span class="profile-label">Allergies:</span>
+            <div class="profile-chips" id="allergen-chips" role="group" aria-label="Allergens to avoid">
+              <button class="chip pchip warn" data-kind="allergens" data-value="dairy">Dairy</button>
+              <button class="chip pchip warn" data-kind="allergens" data-value="egg">Egg</button>
+              <button class="chip pchip warn" data-kind="allergens" data-value="gluten">Gluten</button>
+              <button class="chip pchip warn" data-kind="allergens" data-value="shellfish">Shellfish</button>
+              <button class="chip pchip warn" data-kind="allergens" data-value="fish">Fish</button>
+              <button class="chip pchip warn" data-kind="allergens" data-value="soy">Soy</button>
+              <button class="chip pchip warn" data-kind="allergens" data-value="nuts">Nuts</button>
+              <button class="chip pchip warn" data-kind="allergens" data-value="peanut">Peanut</button>
+              <button class="chip pchip warn" data-kind="allergens" data-value="sesame">Sesame</button>
+            </div>
+          </div>
+          <p class="profile-hint" id="profile-hint">Swaps and matches always respect these — a vegan dish will never be swapped onto meat or dairy.</p>
+        </div>
       </div>
       <section id="match-results" class="grid" aria-label="Matched recipes"></section>
       <p id="match-empty" class="empty hidden">Add a few ingredients above, then tap “Find recipes”.</p>

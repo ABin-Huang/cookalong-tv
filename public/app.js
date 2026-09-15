@@ -24,6 +24,7 @@
   const matchEmpty = $("match-empty");
 
   const PANTRY_KEY = "cookalong.pantry.v1";
+  const PROFILE_KEY = "cookalong.profile.v1";
 
   let activeDiet = "any";
   let mode = "browse";
@@ -44,6 +45,35 @@
   const haves = loadPantry();
   function savePantry() {
     try { localStorage.setItem(PANTRY_KEY, JSON.stringify([...haves])); } catch (_) {}
+  }
+
+  /* ---------- dietary profile (diets + allergens) ---------- */
+
+  function loadProfile() {
+    try {
+      const raw = JSON.parse(localStorage.getItem(PROFILE_KEY) || "{}");
+      return {
+        diets: new Set(Array.isArray(raw.diets) ? raw.diets : []),
+        allergens: new Set(Array.isArray(raw.allergens) ? raw.allergens : [])
+      };
+    } catch (_) { return { diets: new Set(), allergens: new Set() }; }
+  }
+  const profile = loadProfile();
+  function saveProfile() {
+    try {
+      localStorage.setItem(PROFILE_KEY, JSON.stringify({ diets: [...profile.diets], allergens: [...profile.allergens] }));
+    } catch (_) {}
+  }
+  // Plain object shape expected by the engine.
+  function currentProfile() {
+    return { diets: [...profile.diets], allergens: [...profile.allergens] };
+  }
+  function renderProfileChips() {
+    document.querySelectorAll(".pchip").forEach(chip => {
+      const set = chip.dataset.kind === "diets" ? profile.diets : profile.allergens;
+      chip.classList.toggle("active", set.has(chip.dataset.value));
+      chip.setAttribute("aria-pressed", String(set.has(chip.dataset.value)));
+    });
   }
 
   /* ================================================================ *
@@ -72,11 +102,13 @@
 
   function renderGrid() {
     grid.innerHTML = "";
-    const filtered = activeDiet === "any"
-      ? recipes
-      : recipes.filter(r => r.diet.includes(activeDiet));
+    const p = currentProfile();
+    const filtered = recipes.filter(r => {
+      if (activeDiet !== "any" && !r.diet.includes(activeDiet)) return false;
+      return Ing.recipeMatchesProfile ? Ing.recipeMatchesProfile(r, p) : true;
+    });
     if (!filtered.length) {
-      grid.innerHTML = `<p class="empty">No recipes match “${activeDiet}” — try another filter.</p>`;
+      grid.innerHTML = `<p class="empty">No recipes match “${activeDiet}” and your dietary needs — try another filter.</p>`;
       return;
     }
     filtered.forEach(r => grid.appendChild(cardFor(r)));
@@ -144,10 +176,11 @@
     card.tabIndex = 0;
     card.setAttribute("role", "button");
 
+    const p = currentProfile();
     const haveTags = m.matched.map(c =>
       `<span class="tag tag-have">✓ ${Ing.displayName(c)}</span>`).join("");
     const subTags = m.missingSubstitutable.map(c => {
-      const sub = Ing.findSubstitute(r, c);
+      const sub = Ing.findSubstitute(r, c, p);
       return `<span class="tag tag-sub">⇄ no ${Ing.displayName(c)} → ${sub ? sub.name : "swap"}</span>`;
     }).join("");
     const hardTags = m.missingHard.map(c =>
@@ -177,7 +210,10 @@
       return;
     }
     matchEmpty.classList.add("hidden");
-    const all = Ing.matchRecipes([...haves], recipes);
+    const p = currentProfile();
+    const { matches: all, excluded } = Ing.matchRecipesWithExclusions
+      ? Ing.matchRecipesWithExclusions([...haves], recipes, p)
+      : { matches: Ing.matchRecipes([...haves], recipes, p), excluded: [] };
     const picks = all.filter(m => m.score >= 30).slice(0, 6);
     matchResults.innerHTML = "";
     if (!picks.length) {
@@ -186,11 +222,13 @@
     }
     picks.forEach(m => matchResults.appendChild(matchCardFor(m)));
     const best = picks[0];
+    const profileNote = excluded.length
+      ? ` · ${excluded.length} hidden by your diet/allergies` : "";
     setVoiceStatus(
       `Best match: ${best.recipe.name} (${best.score}%)` +
       (best.missingSubstitutable.length
-        ? ` — missing ${best.missingSubstitutable.map(Ing.displayName).join(", ")}, all swappable`
-        : best.missingHard.length ? ` — still need ${best.missingHard.map(Ing.displayName).join(", ")}` : " — you are ready to cook"),
+        ? ` — missing ${best.missingSubstitutable.map(Ing.displayName).join(", ")}, all swappable for your needs`
+        : best.missingHard.length ? ` — still need ${best.missingHard.map(Ing.displayName).join(", ")}` : " — you are ready to cook") + profileNote,
       false);
     return picks;
   }
@@ -241,11 +279,13 @@
         if (used) used.addEventListener("click", () => consumeIngredient(ing.canonical));
       } else {
         row.classList.add("is-missing");
-        const sub = Ing.findSubstitute(currentRecipe, ing.canonical);
+        const sub = Ing.findSubstitute(currentRecipe, ing.canonical, currentProfile());
+        const blocked = !sub && hasIncompatibleOption(currentRecipe, ing.canonical);
         row.innerHTML = `
           <span class="ing-name">✗ ${ing.qty} ${ing.name}</span>
           ${sub ? `<button class="btn small btn-swap">⇄ Swap for ${sub.name}</button>`
-                 : '<span class="ing-note">needed</span>'}`;
+                 : blocked ? '<span class="ing-note warn-note">no safe swap for your diet/allergies</span>'
+                           : '<span class="ing-note">needed</span>'}`;
         const swap = row.querySelector(".btn-swap");
         if (swap) swap.addEventListener("click", () => applySwap(ing.canonical));
       }
@@ -265,9 +305,21 @@
     renderStep();
   }
 
+  // True when a swap chain exists but every option is blocked by the profile.
+  function hasIncompatibleOption(recipe, canonical) {
+    if (!Ing.listSubstitutes) return false;
+    const { chosen, rejected } = Ing.listSubstitutes(recipe, canonical, currentProfile());
+    return !chosen && rejected.length > 0;
+  }
+
   function applySwap(canonical) {
-    const sub = Ing.findSubstitute(currentRecipe, canonical);
-    if (!sub) { showToast(`No known swap for ${Ing.displayName(canonical)}.`); return; }
+    const sub = Ing.findSubstitute(currentRecipe, canonical, currentProfile());
+    if (!sub) {
+      showToast(hasIncompatibleOption(currentRecipe, canonical)
+        ? `Every swap for ${Ing.displayName(canonical)} conflicts with your diet/allergies.`
+        : `No known swap for ${Ing.displayName(canonical)}.`);
+      return;
+    }
     substitutions.set(canonical, sub);
     renderIngredients();
     rebuildSteps();
@@ -401,6 +453,20 @@
     const said = String(raw || "").toLowerCase().trim();
     if (!said) return;
 
+    // Dietary profile: "I'm vegan" / "I'm allergic to dairy" / "I'm not vegan".
+    const dietHit = (Ing.SUPPORTED_DIETS || []).find(d => said.includes(d));
+    const allergenHit = (Ing.COMMON_ALLERGENS || []).find(a => said.includes(a));
+    if (/\b(i'?m|i am|make me|set (?:my )?diet to)\b/.test(said) && (dietHit || allergenHit)) {
+      const remove = /\b(not|no longer|remove)\b/.test(said);
+      if (dietHit) remove ? profile.diets.delete(dietHit) : profile.diets.add(dietHit);
+      if (allergenHit) remove ? profile.allergens.delete(allergenHit) : profile.allergens.add(allergenHit);
+      saveProfile(); renderProfileChips(); renderGrid(); runMatch();
+      const what = dietHit || allergenHit;
+      speak(remove ? `Okay, ${what} restriction removed.` : `Got it. I will keep everything ${what.replace("-", " ")} friendly.`);
+      setVoiceStatus(remove ? `Removed ${what}` : `Profile: avoiding ${what}`, false);
+      return;
+    }
+
     // Step navigation while cooking.
     if (currentRecipe && /\b(next|continue|go on|下一步)\b/.test(said)) { nextStep(); return; }
     if (currentRecipe && /\b(previous|back|go back|上一步)\b/.test(said) && !/^back$/.test(said)) { prevStep(); return; }
@@ -495,6 +561,18 @@
     renderGrid();
   });
 
+  // Dietary profile chips (multi-select): re-run everything that depends on them.
+  document.querySelectorAll(".pchip").forEach(chip => {
+    chip.addEventListener("click", () => {
+      const set = chip.dataset.kind === "diets" ? profile.diets : profile.allergens;
+      const v = chip.dataset.value;
+      set.has(v) ? set.delete(v) : set.add(v);
+      saveProfile(); renderProfileChips();
+      renderGrid(); runMatch();
+      speak(set.has(v) ? `Got it, avoiding ${v.replace("-", " ")} from now on.` : `Okay, removed ${v.replace("-", " ")}.`);
+    });
+  });
+
   $("btn-mic").addEventListener("click", toggleListening);
 
   $("btn-pantry-add").addEventListener("click", () => {
@@ -541,6 +619,7 @@
 
   /* ---------- init ---------- */
 
+  renderProfileChips();
   renderGrid();
   renderHaves();
   renderSuggestions();

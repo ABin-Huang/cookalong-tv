@@ -1,0 +1,95 @@
+{
+  "type": "APL",
+  "version": "1.9",
+  "theme": "dark",
+  "mainTemplate": {
+    "parameters": ["payload"],
+    "items": [
+      {
+        "type": "Frame",
+        "id": "swapRoot",
+        "width": "100%",
+        "height": "100%",
+        "backgroundColor": "#0b0f14",
+        "paddingLeft": 80,
+        "paddingRight": 80,
+        "item": {
+          "type": "Container",
+          "width": "100%",
+          "height": "100%",
+          "justifyContent": "center",
+          "items": [
+            {
+              "type": "Text",
+              "text": "SMART SWAP",
+              "fontSize": 30,
+              "color": "#b79cf0",
+              "letterSpacing": 3
+            },
+            {
+              "type": "Container",
+              "direction": "row",
+              "alignItems": "center",
+              "spacing": 36,
+              "marginTop": 36,
+              "marginBottom": 36,
+              "items": [
+                {
+                  "type": "Text",
+                  "text": "${payload.cookalongData.properties.fromName}",
+                  "fontSize": 48,
+                  "color": "#e6a8b5",
+                  "textDecoration": "line-through"
+                },
+                {
+                  "type": "Text",
+                  "text": "→",
+                  "fontSize": 60,
+                  "color": "#ff8c42"
+                },
+                {
+                  "type": "Text",
+                  "text": "${payload.cookalongData.properties.toName}",
+                  "fontSize": 56,
+                  "fontWeight": 700,
+                  "color": "#d9c9f5"
+                }
+              ]
+            },
+            {
+              "type": "Frame",
+              "width": "86%",
+              "backgroundColor": "#241d33",
+              "borderRadius": 16,
+              "borderWidth": 2,
+              "borderColor": "#7a5cc4",
+              "padding": 28,
+              "item": {
+                "type": "Text",
+                "text": "${payload.cookalongData.properties.note}",
+                "fontSize": 32,
+                "lineHeight": 1.35,
+                "color": "#e6dbfa"
+              }
+            },
+            {
+              "type": "Text",
+              "text": "${payload.cookalongData.properties.safeNote}",
+              "fontSize": 24,
+              "color": "#46d188",
+              "spacing": 28,
+              "when": "${payload.cookalongData.properties.safeNote != ''}"
+            },
+            {
+              "type": "Text",
+              "text": "Say “next step” to keep cooking.",
+              "fontSize": 26,
+              "color": "#78889a",
+              "spacing": 24
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
