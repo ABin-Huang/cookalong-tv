@@ -31,7 +31,75 @@
             "cook {recipe}",
             "start cooking {recipe}",
             "let's make {recipe}",
-            "I want to cook {recipe}"
+            "I want to cook {recipe}",
+            "cook it",
+            "cook this one",
+            "let's cook this"
+          ]
+        },
+        {
+          "name": "WhatDoIHaveIntent",
+          "slots": [
+            {
+              "name": "ingredients",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "i have {ingredients}",
+            "i've got {ingredients}",
+            "my fridge has {ingredients}",
+            "what can i make with {ingredients}",
+            "what can i cook with {ingredients}",
+            "find recipes using {ingredients}",
+            "recipes with {ingredients}"
+          ]
+        },
+        {
+          "name": "NextMatchIntent",
+          "slots": [],
+          "samples": [
+            "what else",
+            "next option",
+            "another one",
+            "show me more options",
+            "anything else"
+          ]
+        },
+        {
+          "name": "SubstituteIntent",
+          "slots": [
+            {
+              "name": "ingredient",
+              "type": "INGREDIENT"
+            }
+          ],
+          "samples": [
+            "i don't have {ingredient}",
+            "i do not have {ingredient}",
+            "no {ingredient}",
+            "i'm out of {ingredient}",
+            "substitute {ingredient}",
+            "replace {ingredient}",
+            "what can replace {ingredient}",
+            "what can i use instead of {ingredient}"
+          ]
+        },
+        {
+          "name": "ExcludeIngredientIntent",
+          "slots": [
+            {
+              "name": "ingredient",
+              "type": "INGREDIENT"
+            }
+          ],
+          "samples": [
+            "without {ingredient}",
+            "exclude {ingredient}",
+            "i hate {ingredient}",
+            "i don't like {ingredient}",
+            "no {ingredient} please",
+            "nothing with {ingredient}"
           ]
         },
         {
@@ -102,7 +170,13 @@
             { "name": { "value": "tomato basil pasta" } },
             { "name": { "value": "vegetable stir fry" } },
             { "name": { "value": "garlic chicken rice" } },
-            { "name": { "value": "fluffy french toast" } }
+            { "name": { "value": "fluffy french toast" } },
+            { "name": { "value": "creamy mushroom risotto" } },
+            { "name": { "value": "turmeric tofu scramble" } },
+            { "name": { "value": "beef and broccoli" } },
+            { "name": { "value": "banana oat pancakes" } },
+            { "name": { "value": "lemon garlic shrimp" } },
+            { "name": { "value": "hearty chicken soup" } }
           ]
         },
         {
@@ -111,6 +185,41 @@
             { "name": { "value": "vegetarian" } },
             { "name": { "value": "vegan" } },
             { "name": { "value": "gluten-free" } }
+          ]
+        },
+        {
+          "name": "INGREDIENT",
+          "values": [
+            { "name": { "value": "chicken" }, "synonyms": ["chicken breast", "chicken thighs"] },
+            { "name": { "value": "beef" }, "synonyms": ["steak"] },
+            { "name": { "value": "shrimp" }, "synonyms": ["prawns"] },
+            { "name": { "value": "tofu" } },
+            { "name": { "value": "rice" } },
+            { "name": { "value": "pasta" }, "synonyms": ["spaghetti", "noodles"] },
+            { "name": { "value": "bread" } },
+            { "name": { "value": "oats" }, "synonyms": ["rolled oats", "oatmeal"] },
+            { "name": { "value": "tomato" }, "synonyms": ["tomatoes", "crushed tomatoes"] },
+            { "name": { "value": "garlic" } },
+            { "name": { "value": "onion" } },
+            { "name": { "value": "mushroom" }, "synonyms": ["mushrooms"] },
+            { "name": { "value": "broccoli" } },
+            { "name": { "value": "carrot" }, "synonyms": ["carrots"] },
+            { "name": { "value": "bell pepper" }, "synonyms": ["pepper", "peppers"] },
+            { "name": { "value": "spinach" } },
+            { "name": { "value": "potato" }, "synonyms": ["potatoes"] },
+            { "name": { "value": "scallion" }, "synonyms": ["green onion", "spring onion"] },
+            { "name": { "value": "ginger" } },
+            { "name": { "value": "basil" } },
+            { "name": { "value": "egg" }, "synonyms": ["eggs"] },
+            { "name": { "value": "milk" } },
+            { "name": { "value": "butter" } },
+            { "name": { "value": "cheese" }, "synonyms": ["parmesan", "cheddar", "grated parmesan"] },
+            { "name": { "value": "banana" }, "synonyms": ["bananas"] },
+            { "name": { "value": "lemon" }, "synonyms": ["lemon juice"] },
+            { "name": { "value": "honey" } },
+            { "name": { "value": "maple syrup" } },
+            { "name": { "value": "chicken stock" }, "synonyms": ["chicken broth"] },
+            { "name": { "value": "vegetable stock" }, "synonyms": ["vegetable broth"] }
           ]
         }
       ]
