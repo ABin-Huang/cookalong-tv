@@ -135,6 +135,13 @@
     if (t.includes("vegetarian")) { activateDiet("vegetarian"); setVoiceStatus("Filtered to vegetarian recipes"); return; }
     if (t.includes("gluten")) { activateDiet("gluten-free"); setVoiceStatus("Filtered to gluten-free recipes"); return; }
     if (t.includes("all recipes") || t.includes("show everything")) { activateDiet("any"); setVoiceStatus("Showing all recipes"); return; }
+    if (/what can i (?:cook|make)|what's in my kitchen|what is in my kitchen|i have|i've got|i have got|my fridge has|冰箱里有|我家里有|家里有/.test(t)) {
+      if (viewRecipe.classList.contains("hidden") === false) { $("btn-back").click(); }
+      kitchenInput.value = t;
+      runKitchenMatch();
+      setVoiceStatus("Matching recipes to your kitchen");
+      return;
+    }
     if (t.includes("next")) {
       if (currentRecipe) {
         if (currentStep < currentRecipe.steps.length - 1) { currentStep += 1; renderStep(); speak(`Step ${currentStep + 1}. ${currentRecipe.steps[currentStep]}`); return; }
@@ -191,6 +198,77 @@
     renderGrid();
   }
 
+  /* ---------------- Kitchen: "What's in my kitchen?" ---------------- */
+  const engine = window.CookalongIngredients || null;
+  const kitchenInput = $("kitchen-input");
+  const kitchenChips = $("kitchen-chips");
+  const kitchenResults = $("kitchen-results");
+  const QUICK_INGREDIENTS = ["chicken", "garlic", "rice", "tomato", "broccoli", "eggs", "mushrooms", "tofu", "shrimp", "beef", "bananas", "lemon", "pasta", "carrot", "onion"];
+
+  function renderKitchenChips() {
+    if (!engine || !kitchenChips) return;
+    kitchenChips.innerHTML = "";
+    QUICK_INGREDIENTS.forEach(name => {
+      const chip = document.createElement("button");
+      chip.className = "chip kitchen-chip";
+      chip.type = "button";
+      chip.textContent = name;
+      chip.addEventListener("click", () => {
+        const cur = kitchenInput.value.trim();
+        kitchenInput.value = cur ? `${cur}, ${name}` : name;
+        kitchenInput.focus();
+      });
+      kitchenChips.appendChild(chip);
+    });
+  }
+
+  function runKitchenMatch() {
+    if (!engine) { showToast("Ingredient engine not loaded.", 3500); return; }
+    const { recognized, unknown } = engine.parseIngredientList(kitchenInput.value);
+    if (!recognized.length) {
+      kitchenResults.innerHTML = `<p class="kitchen-empty">I couldn't recognise any ingredients. Try things like “chicken, garlic, rice”${unknown.length ? ` — I didn't get: ${unknown.join(", ")}` : ""}.</p>`;
+      return;
+    }
+    const matches = engine.topMatches(recognized, recipes, 25, 5);
+    if (!matches.length) {
+      kitchenResults.innerHTML = `<p class="kitchen-empty">Nothing scores high enough with only: ${recognized.map(engine.displayName).join(", ")}. Add more ingredients for better matches.</p>`;
+      return;
+    }
+    kitchenResults.innerHTML = "";
+    matches.forEach(m => kitchenResults.appendChild(kitchenMatchCard(m)));
+    speak(`I found ${matches.length} recipes you can make.`);
+    setVoiceStatus(`Found ${matches.length} matches for your kitchen`);
+    showToast(`🧺 ${matches.length} recipe${matches.length > 1 ? "s" : ""} matched`, 3000);
+  }
+
+  function kitchenMatchCard(m) {
+    const r = m.recipe;
+    const card = document.createElement("article");
+    card.className = "match-card";
+    card.tabIndex = 0;
+    const have = m.matched.map(engine.displayName).join(", ");
+    const swaps = m.missingSubstitutable.map(c => {
+      const sub = engine.findSubstitute(r, c, { diets: [], allergens: [] });
+      return `${engine.displayName(c)} → ${sub ? sub.name : "swap"}`;
+    });
+    const missing = m.missingHard.map(engine.displayName).join(", ");
+    card.innerHTML = `
+      <div class="match-head">
+        <h4>${r.name}</h4>
+        <span class="match-score">${m.score}%</span>
+      </div>
+      <div class="match-bar"><span style="width:${m.score}%"></span></div>
+      <div class="match-body">
+        ${have ? `<p class="m-ok">✓ ${have}</p>` : ""}
+        ${swaps.length ? `<p class="m-swap">🔄 ${swaps.join(" · ")}</p>` : ""}
+        ${missing ? `<p class="m-miss">✗ ${missing}</p>` : ""}
+      </div>
+      <button class="btn primary match-cook" type="button">Cook it</button>`;
+    card.querySelector(".match-cook").addEventListener("click", () => openRecipe(r.id));
+    card.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") openRecipe(r.id); });
+    return card;
+  }
+
   let toastHandle = null;
   function showToast(message, ms = 2500) {
     const toast = $("toast");
@@ -210,6 +288,10 @@
   $("btn-timer-reset").addEventListener("click", resetTimer);
   $("btn-speak").addEventListener("click", () => { if (currentRecipe) speak(currentRecipe.steps[currentStep]); });
   $("btn-voice").addEventListener("click", toggleVoice);
+  if (kitchenInput) {
+    $("btn-kitchen-find").addEventListener("click", runKitchenMatch);
+    kitchenInput.addEventListener("keydown", e => { if (e.key === "Enter") runKitchenMatch(); });
+  }
   document.addEventListener("keydown", e => {
     if (viewRecipe.classList.contains("hidden")) return;
     if (e.key === "ArrowRight") $("btn-next").click();
@@ -217,5 +299,6 @@
   });
 
   renderGrid();
-  showToast("Welcome to CookAlong TV! Choose a recipe to start.");
+  renderKitchenChips();
+  showToast("Welcome to CookAlong TV! Choose a recipe or tell me what's in your kitchen.");
 })();

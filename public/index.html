@@ -24,10 +24,21 @@
       <button class="chip" data-diet="gluten-free">Gluten-free</button>
     </section>
     <section id="recipe-grid" class="grid" aria-label="Recipe list"></section>
+    <section id="kitchen" class="kitchen" aria-label="What can I cook">
+      <h3 class="kitchen-title">🧺 What's in my kitchen?</h3>
+      <p class="kitchen-hint">Tell CookAlong what you have — it will find the best recipes, flag what's missing, and suggest swaps.</p>
+      <div class="kitchen-input">
+        <input id="kitchen-input" type="text" placeholder="e.g. chicken, garlic, rice, 番茄, 鸡蛋" autocomplete="off" />
+        <button id="btn-kitchen-find" class="btn primary">Find recipes</button>
+      </div>
+      <div id="kitchen-chips" class="kitchen-chips" aria-label="Quick ingredient chips"></div>
+      <div id="kitchen-results" class="kitchen-results"></div>
+    </section>
     <aside id="voice-cheatsheet" class="cheatsheet">
       <h4>🎙 Voice commands (demo)</h4>
       <ul>
         <li>"cook <em>tomato basil pasta</em>" — open a recipe</li>
+        <li>"what can I cook with <em>chicken and garlic</em>" — smart match</li>
         <li>"next step" / "previous step"</li>
         <li>"repeat step"</li>
         <li>"set a timer" / "start timer" / "pause timer"</li>
@@ -62,6 +73,7 @@
   <footer id="footer">CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</footer>
   <div id="toast" class="toast hidden"></div>
   <script src="recipes-data.js"></script>
+  <script src="ingredients-engine.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
