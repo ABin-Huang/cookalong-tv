@@ -9,7 +9,7 @@ window.COOKALONG_RECIPES = [
     ingredients: [
       { name: "spaghetti", canonical: "pasta", qty: "200g", role: "main" },
       { name: "crushed tomatoes", canonical: "tomato", qty: "400g", role: "main" },
-      { name: "garlic cloves", canonical: "garlic", qty: "3", role: "secondary" },
+      { name: "garlic cloves", canonical: "garlic", qty: "3", role: "seasoning" },
       { name: "fresh basil leaves", canonical: "basil", qty: "a handful", role: "secondary" },
       { name: "olive oil", canonical: "olive-oil", qty: "2 tbsp", role: "seasoning", pantry: true },
       { name: "salt", canonical: "salt", qty: "to taste", role: "seasoning", pantry: true },
@@ -111,16 +111,14 @@ window.COOKALONG_RECIPES = [
       { name: "mushrooms", canonical: "mushroom", qty: "250g", role: "main" },
       { name: "onion", canonical: "onion", qty: "1", role: "secondary" },
       { name: "garlic cloves", canonical: "garlic", qty: "2", role: "secondary" },
-      { name: "vegetable stock", canonical: "vegetable-stock", qty: "600ml", role: "secondary" },
+      { name: "vegetable stock", canonical: "vegetable-stock", qty: "600ml", role: "secondary", pantry: true },
       { name: "grated parmesan", canonical: "cheese", qty: "40g", role: "secondary" },
-      { name: "butter", canonical: "butter", qty: "1 tbsp", role: "secondary" },
+      { name: "butter", canonical: "butter", qty: "1 tbsp", role: "secondary", pantry: true },
       { name: "olive oil", canonical: "olive-oil", qty: "2 tbsp", role: "seasoning", pantry: true },
       { name: "salt", canonical: "salt", qty: "to taste", role: "seasoning", pantry: true },
       { name: "black pepper", canonical: "black-pepper", qty: "to taste", role: "seasoning", pantry: true }
     ],
     substitutions: {
-      // This is a vegetarian dish: plant-based candidates first, tagged so
-      // the engine never offers chicken stock to a vegetarian cook.
       "vegetable-stock": [
         { name: "mushroom stock", note: "Same amount; it deepens the risotto's umami.", diet: ["vegan", "vegetarian", "gluten-free", "dairy-free"], allergens: [] },
         { name: "chicken stock", note: "Same amount; it works beautifully in risotto.", diet: ["gluten-free", "dairy-free"], allergens: [] }
