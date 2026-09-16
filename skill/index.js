@@ -7,7 +7,7 @@
  */
 
 const Alexa = require("ask-sdk-core");
-const { listRecipes, getRecipe, formatStep } = require("../src/recipes");
+const { listRecipes, getRecipe, findRecipe, formatStep } = require("../src/recipes");
 const { parseDuration, Timer } = require("../src/timer");
 
 const SESSION_STATE_KEY = "cookalong";
@@ -58,7 +58,7 @@ const StartCookingIntentHandler = {
         .reprompt("Tell me a recipe name, like tomato basil pasta.")
         .getResponse();
     }
-    const recipe = getRecipe(slot);
+    const recipe = findRecipe(slot);
     if (!recipe) {
       return handlerInput.responseBuilder
         .speak(`I couldn't find a recipe called ${slot}. Try tomato basil pasta, vegetable stir fry, garlic chicken rice, or fluffy french toast.`)

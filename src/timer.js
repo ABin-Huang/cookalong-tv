@@ -37,12 +37,31 @@ function parseNumber(token) {
 }
 
 /**
+ * Parse an ISO 8601 duration (Alexa AMAZON.DURATION slot format),
+ * e.g. "PT5M", "PT1H30M", "PT45S".
+ * @param {string} text
+ * @returns {number|null} seconds
+ */
+function parseISODuration(text) {
+  const m = /^PT(?:\d+H)?(?:\d+M)?(?:\d+S)?$/i.exec(String(text).trim());
+  if (!m) return null;
+  const parts = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i.exec(String(text).trim());
+  const hours = parseInt(parts[1] || "0", 10);
+  const minutes = parseInt(parts[2] || "0", 10);
+  const seconds = parseInt(parts[3] || "0", 10);
+  const total = hours * 3600 + minutes * 60 + seconds;
+  return total > 0 ? total : null;
+}
+
+/**
  * Parse a spoken or typed duration into total seconds.
- * @param {string} text e.g. "5 minutes", "1 hour 30 minutes", "ninety seconds"
+ * @param {string} text e.g. "5 minutes", "1 hour 30 minutes", "PT5M", "ninety seconds"
  * @returns {number|null} seconds, or null when unparseable
  */
 function parseDuration(text) {
   if (!text) return null;
+  const iso = parseISODuration(text);
+  if (iso !== null) return iso;
   const tokens = String(text)
     .toLowerCase()
     .replace(/[^a-z0-9\s]/g, " ")
@@ -66,6 +85,7 @@ function parseDuration(text) {
       if (n !== null) {
         currentNumber = n;
       } else if (token === "and" || token === "a") {
+        // "a minute" / "one hour and thirty minutes"
         if (token === "a" && currentNumber === null) currentNumber = 1;
       }
     }

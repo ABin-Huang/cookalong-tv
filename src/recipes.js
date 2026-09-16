@@ -106,6 +106,19 @@ function getRecipe(id) {
 }
 
 /**
+ * Find a recipe by id OR display name (case-insensitive).
+ * The Alexa RECIPE slot carries the display name ("tomato basil pasta"),
+ * while the web app references recipes by id — this bridges both.
+ * @param {string} query
+ * @returns {object|null}
+ */
+function findRecipe(query) {
+  if (!query) return null;
+  const q = String(query).toLowerCase().trim();
+  return RECIPES.find(r => r.id === q || r.name.toLowerCase() === q) || null;
+}
+
+/**
  * Voice-friendly step text.
  * @param {object} recipe
  * @param {number} stepNumber 1-based step index
@@ -121,5 +134,6 @@ module.exports = {
   RECIPES,
   listRecipes,
   getRecipe,
+  findRecipe,
   formatStep
 };
