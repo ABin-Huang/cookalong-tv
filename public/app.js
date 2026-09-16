@@ -23,7 +23,8 @@
     card.setAttribute("role", "button");
     card.setAttribute("aria-label", `Start cooking ${recipe.name}`);
     const tags = recipe.diet.length ? recipe.diet.join(" · ") : "Everyone";
-    card.innerHTML = `<div class="card-body"><h3>${recipe.name}</h3><p class="card-meta">${recipe.prepTimeMinutes} min · serves ${recipe.serves} · ${recipe.stepCount || recipe.steps.length} steps</p><p class="card-diet">${tags}</p></div>`;
+    const kcal = recipe.nutrition ? recipe.nutrition.kcal : null;
+    card.innerHTML = `<div class="card-body"><h3>${recipe.name}</h3><p class="card-meta">${recipe.prepTimeMinutes} min · serves ${recipe.serves} · ${recipe.stepCount || recipe.steps.length} steps${kcal ? ` · 🔥 ${kcal} kcal` : ""}</p><p class="card-diet">${tags}</p></div>`;
     card.addEventListener("click", () => openRecipe(recipe.id));
     card.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") openRecipe(recipe.id); });
     return card;
@@ -44,7 +45,9 @@
     viewHome.classList.add("hidden");
     viewRecipe.classList.remove("hidden");
     $("recipe-title").textContent = currentRecipe.name;
-    $("recipe-meta").textContent = `${currentRecipe.prepTimeMinutes} min · serves ${currentRecipe.serves}`;
+    const n = currentRecipe.nutrition;
+    $("recipe-meta").textContent = `${currentRecipe.prepTimeMinutes} min · serves ${currentRecipe.serves}` +
+      (n ? ` · 🔥 ${n.kcal} kcal · P ${n.protein}g / C ${n.carbs}g / F ${n.fat}g per serving` : "");
     renderStep(); renderProgress();
     window.scrollTo(0, 0);
     speak(`Starting ${currentRecipe.name}. ${currentRecipe.steps[0]}`, true);
@@ -203,7 +206,47 @@
   const kitchenInput = $("kitchen-input");
   const kitchenChips = $("kitchen-chips");
   const kitchenResults = $("kitchen-results");
+  const pantryChips = $("pantry-chips");
+  const PANTRY_KEY = "cookalong.pantry.v1";
   const QUICK_INGREDIENTS = ["chicken", "garlic", "rice", "tomato", "broccoli", "eggs", "mushrooms", "tofu", "shrimp", "beef", "bananas", "lemon", "pasta", "carrot", "onion"];
+  let pantry = null;
+
+  function initPantry() {
+    if (!engine || !engine.Pantry) return;
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem(PANTRY_KEY) || "[]"); } catch (e) { saved = []; }
+    pantry = engine.Pantry.fromJSON(saved);
+    renderPantry();
+  }
+
+  function savePantry() {
+    try { localStorage.setItem(PANTRY_KEY, JSON.stringify(pantry.all())); } catch (e) { /* private mode */ }
+    renderPantry();
+  }
+
+  function renderPantry() {
+    if (!pantryChips || !pantry) return;
+    pantryChips.innerHTML = "";
+    pantry.all().forEach(canon => {
+      const chip = document.createElement("button");
+      chip.className = "chip pantry-chip";
+      chip.type = "button";
+      chip.title = "Tap to mark as used";
+      chip.textContent = engine.displayName(canon);
+      chip.addEventListener("click", () => {
+        pantry.consume(canon);
+        savePantry();
+        showToast(`🍱 ${engine.displayName(canon)} marked as used`, 2500);
+      });
+      pantryChips.appendChild(chip);
+    });
+    if (!pantry.size) {
+      const empty = document.createElement("span");
+      empty.className = "pantry-empty";
+      empty.textContent = "empty — save ingredients you always keep";
+      pantryChips.appendChild(empty);
+    }
+  }
 
   function renderKitchenChips() {
     if (!engine || !kitchenChips) return;
@@ -229,8 +272,9 @@
       kitchenResults.innerHTML = `<p class="kitchen-empty">I couldn't recognise any ingredients. Try things like “chicken, garlic, rice”${unknown.length ? ` — I didn't get: ${unknown.join(", ")}` : ""}.</p>`;
       return;
     }
+    const have = Array.from(new Set([...recognized, ...(pantry ? pantry.all() : [])]));
     const profile = activeDiet === "any" ? undefined : { diets: [activeDiet], allergens: [] };
-    const matches = engine.topMatches(recognized, recipes, 25, 5, profile);
+    const matches = engine.topMatches(have, recipes, 25, 5, profile);
     if (!matches.length) {
       kitchenResults.innerHTML = `<p class="kitchen-empty">Nothing scores high enough with only: ${recognized.map(engine.displayName).join(", ")}. Add more ingredients for better matches.</p>`;
       return;
@@ -240,6 +284,16 @@
     speak(`I found ${matches.length} recipes you can make.`);
     setVoiceStatus(`Found ${matches.length} matches for your kitchen`);
     showToast(`🧺 ${matches.length} recipe${matches.length > 1 ? "s" : ""} matched`, 3000);
+  }
+
+  function saveKitchenInputToPantry() {
+    if (!engine || !pantry) { showToast("Pantry not available.", 3000); return; }
+    const { recognized, unknown } = engine.parseIngredientList(kitchenInput.value);
+    if (!recognized.length) { showToast("Nothing recognisable to save — try “chicken, garlic”.", 3000); return; }
+    recognized.forEach(c => pantry.restock(c));
+    savePantry();
+    setVoiceStatus(`Saved ${recognized.length} ingredient${recognized.length > 1 ? "s" : ""} to pantry`);
+    showToast(`🍱 Saved to pantry: ${recognized.map(engine.displayName).join(", ")}`, 3500);
   }
 
   function kitchenMatchCard(m, profile) {
@@ -253,10 +307,11 @@
       return `${engine.displayName(c)} → ${sub ? sub.name : "swap"}`;
     });
     const missing = m.missingHard.map(engine.displayName).join(", ");
+    const kcal = r.nutrition ? r.nutrition.kcal : null;
     card.innerHTML = `
       <div class="match-head">
         <h4>${r.name}</h4>
-        <span class="match-score">${m.score}%</span>
+        <span class="match-score">${m.score}%${kcal ? ` · 🔥 ${kcal}` : ""}</span>
       </div>
       <div class="match-bar"><span style="width:${m.score}%"></span></div>
       <div class="match-body">
@@ -291,6 +346,7 @@
   $("btn-voice").addEventListener("click", toggleVoice);
   if (kitchenInput) {
     $("btn-kitchen-find").addEventListener("click", runKitchenMatch);
+    $("btn-pantry-add").addEventListener("click", saveKitchenInputToPantry);
     kitchenInput.addEventListener("keydown", e => { if (e.key === "Enter") runKitchenMatch(); });
   }
   document.addEventListener("keydown", e => {
@@ -301,5 +357,6 @@
 
   renderGrid();
   renderKitchenChips();
+  initPantry();
   showToast("Welcome to CookAlong TV! Choose a recipe or tell me what's in your kitchen.");
 })();
