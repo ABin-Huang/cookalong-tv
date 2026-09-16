@@ -3,113 +3,53 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#101418" />
-  <link rel="manifest" href="manifest.json" />
   <title>CookAlong TV</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <!-- 10-foot UI: optimized for Fire TV / large screens, high contrast, big text -->
   <header id="topbar">
     <h1 class="logo">🍳 CookAlong <span>TV</span></h1>
-    <div class="topbar-right">
-      <button id="btn-mic" class="mic-btn" aria-pressed="false">🎤 <span>Speak</span></button>
-      <div id="voice-status" class="voice-status" aria-live="polite">
-        <span class="pulse"></span><span id="voice-status-text">Say “Alexa, open CookAlong” — or tap Speak</span>
-      </div>
+    <div id="voice-status" class="voice-status" aria-live="polite">
+      <span class="pulse"></span> <span id="voice-text">Say "Alexa, open CookAlong" — or just use the remote</span>
+      <button id="btn-voice" class="mic" title="Try voice control (browser demo)">
+        <span id="mic-icon">🎙</span><span id="mic-label">Voice</span>
+      </button>
     </div>
   </header>
-
-  <!-- ======================= HOME ======================= -->
   <main id="view-home" class="view">
-    <nav class="mode-tabs" role="tablist">
-      <button class="mode-tab active" data-mode="browse" role="tab">📖 Browse recipes</button>
-      <button class="mode-tab" data-mode="pantry" role="tab">🧺 What’s in my kitchen</button>
-    </nav>
-
-    <!-- Browse mode -->
-    <section id="panel-browse">
-      <section id="filters" class="filters">
-        <button class="chip active" data-diet="any">All recipes</button>
-        <button class="chip" data-diet="vegetarian">Vegetarian</button>
-        <button class="chip" data-diet="vegan">Vegan</button>
-        <button class="chip" data-diet="gluten-free">Gluten-free</button>
-      </section>
-      <section id="recipe-grid" class="grid" aria-label="Recipe list"></section>
+    <section id="filters" class="filters">
+      <button class="chip active" data-diet="any">All recipes</button>
+      <button class="chip" data-diet="vegetarian">Vegetarian</button>
+      <button class="chip" data-diet="vegan">Vegan</button>
+      <button class="chip" data-diet="gluten-free">Gluten-free</button>
     </section>
-
-    <!-- Pantry / smart-match mode -->
-    <section id="panel-pantry" class="hidden">
-      <div class="pantry-box">
-        <h2 class="pantry-title">Tell CookAlong what you have — it finds what you can cook</h2>
-        <div class="pantry-input-row">
-          <input id="pantry-input" class="pantry-input" type="text"
-                 placeholder='Type ingredients, e.g. "mushrooms, rice, onion"' autocomplete="off" />
-          <button id="btn-pantry-add" class="btn">Add</button>
-          <button id="btn-find" class="btn primary">🔍 Find recipes</button>
-          <button id="btn-clear-haves" class="btn ghost">Clear</button>
-        </div>
-        <div id="ingredient-suggestions" class="suggestions" aria-label="Quick-pick ingredients"></div>
-        <div class="haves-row">
-          <span class="haves-label">My kitchen:</span>
-          <div id="pantry-haves" class="haves"></div>
-        </div>
-        <div class="profile-box">
-          <div class="profile-line">
-            <span class="profile-label">My diet:</span>
-            <div class="profile-chips" id="diet-chips" role="group" aria-label="Dietary preferences">
-              <button class="chip pchip" data-kind="diets" data-value="vegan">Vegan</button>
-              <button class="chip pchip" data-kind="diets" data-value="vegetarian">Vegetarian</button>
-              <button class="chip pchip" data-kind="diets" data-value="gluten-free">Gluten-free</button>
-              <button class="chip pchip" data-kind="diets" data-value="dairy-free">Dairy-free</button>
-            </div>
-          </div>
-          <div class="profile-line">
-            <span class="profile-label">Allergies:</span>
-            <div class="profile-chips" id="allergen-chips" role="group" aria-label="Allergens to avoid">
-              <button class="chip pchip warn" data-kind="allergens" data-value="dairy">Dairy</button>
-              <button class="chip pchip warn" data-kind="allergens" data-value="egg">Egg</button>
-              <button class="chip pchip warn" data-kind="allergens" data-value="gluten">Gluten</button>
-              <button class="chip pchip warn" data-kind="allergens" data-value="shellfish">Shellfish</button>
-              <button class="chip pchip warn" data-kind="allergens" data-value="fish">Fish</button>
-              <button class="chip pchip warn" data-kind="allergens" data-value="soy">Soy</button>
-              <button class="chip pchip warn" data-kind="allergens" data-value="nuts">Nuts</button>
-              <button class="chip pchip warn" data-kind="allergens" data-value="peanut">Peanut</button>
-              <button class="chip pchip warn" data-kind="allergens" data-value="sesame">Sesame</button>
-            </div>
-          </div>
-          <p class="profile-hint" id="profile-hint">Swaps and matches always respect these — a vegan dish will never be swapped onto meat or dairy.</p>
-        </div>
-      </div>
-      <section id="match-results" class="grid" aria-label="Matched recipes"></section>
-      <p id="match-empty" class="empty hidden">Add a few ingredients above, then tap “Find recipes”.</p>
-    </section>
+    <section id="recipe-grid" class="grid" aria-label="Recipe list"></section>
+    <aside id="voice-cheatsheet" class="cheatsheet">
+      <h4>🎙 Voice commands (demo)</h4>
+      <ul>
+        <li>"cook <em>tomato basil pasta</em>" — open a recipe</li>
+        <li>"next step" / "previous step"</li>
+        <li>"repeat step"</li>
+        <li>"set a timer" / "start timer" / "pause timer"</li>
+        <li>"filter vegan" / "vegetarian" / "gluten-free"</li>
+      </ul>
+    </aside>
   </main>
-
-  <!-- ======================= RECIPE ======================= -->
   <main id="view-recipe" class="view hidden">
-    <button id="btn-back" class="btn-back">← Back</button>
+    <button id="btn-back" class="btn-back">← All recipes</button>
     <h2 id="recipe-title"></h2>
     <p id="recipe-meta" class="meta"></p>
-
-    <section id="recipe-ingredients" class="ingredient-panel">
-      <h3 class="ingredient-heading">Ingredients</h3>
-      <div id="ingredient-list" class="ingredient-list"></div>
-    </section>
-
-    <div id="substitution-banner" class="sub-banner hidden"></div>
-
+    <div id="progress" class="progress" aria-label="Step progress"></div>
     <section id="step-card" class="step-card">
       <div class="step-number" id="step-label">Step 1</div>
       <p id="step-text" class="step-text"></p>
     </section>
-
     <div class="controls">
       <button id="btn-prev" class="btn">◀ Previous</button>
-      <button id="btn-timer" class="btn primary">⏱ Set timer 5:00</button>
+      <button id="btn-timer" class="btn primary">⏱ Set timer</button>
+      <button id="btn-speak" class="btn">🔊 Read step</button>
       <button id="btn-next" class="btn">Next ▶</button>
     </div>
-
     <div id="timer-display" class="timer hidden">
       <div id="timer-time" class="timer-time">05:00</div>
       <div class="timer-controls">
@@ -119,13 +59,9 @@
       </div>
     </div>
   </main>
-
-  <footer id="footer">CookAlong TV 2.0 · Ingredient-aware cooking for Amazon Fire TV + Alexa+</footer>
-
+  <footer id="footer">CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</footer>
   <div id="toast" class="toast hidden"></div>
-
   <script src="recipes-data.js"></script>
-  <script src="ingredients-engine.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

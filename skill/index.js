@@ -1,285 +1,182 @@
 "use strict";
 
-/**
- * CookAlong TV — Alexa skill (ASK SDK v2, AWS Lambda ready).
- *
- * Thin ASK glue: all conversation logic, SSML and APL datasources live in
- * ./responses.js (unit-tested without the SDK). This file handles:
- *   - request/response interceptors (session state + persistent profile)
- *   - intent routing
- *   - Alexa.Presentation.APL.RenderDocument directives for Fire TV / Echo Show
- *   - optional DynamoDB-backed profile persistence (set DYNAMODB_TABLE)
- *
- * Deploy: see skill/DEPLOY.md.
- */
-
 const Alexa = require("ask-sdk-core");
-const { listRecipes } = require("../src/recipes");
+const { listRecipes, getRecipe, findRecipe, formatStep } = require("../src/recipes");
 const { parseDuration, Timer } = require("../src/timer");
-const R = require("./responses");
 
-const SESSION_KEY = "cookalong";
-const APL_TOKEN = "cookalong-screen";
-
-/* ------------------------------ interceptors ---------------------------- */
-
-// Initialise session state and merge a profile remembered across sessions.
-const LoadStateInterceptor = {
-  async process(handlerInput) {
-    const attrs = handlerInput.attributesManager.getSessionAttributes();
-    if (!attrs[SESSION_KEY]) {
-      const s = { recipeId: null, step: 0, swaps: {}, diets: [], allergens: [] };
-      try {
-        const persistent = await handlerInput.attributesManager.getPersistentAttributes();
-        if (Array.isArray(persistent.diets)) s.diets = persistent.diets;
-        if (Array.isArray(persistent.allergens)) s.allergens = persistent.allergens;
-      } catch (_) { /* no persistence adapter: session-only profile */ }
-      attrs[SESSION_KEY] = s;
-      handlerInput.attributesManager.setSessionAttributes(attrs);
-    }
-  }
-};
-
-// Persist the cook's diet/allergen profile for future sessions.
-const SaveProfileInterceptor = {
-  async process(handlerInput, response) {
-    if (!response) return;
-    const attrs = handlerInput.attributesManager.getSessionAttributes();
-    const s = attrs[SESSION_KEY];
-    if (!s) return;
-    try {
-      handlerInput.attributesManager.setPersistentAttributes({
-        diets: s.diets || [],
-        allergens: s.allergens || []
-      });
-      await handlerInput.attributesManager.savePersistentAttributes();
-    } catch (_) { /* persistence is optional */ }
-  }
-};
+const SESSION_STATE_KEY = "cookalong";
 
 function state(handlerInput) {
-  return handlerInput.attributesManager.getSessionAttributes()[SESSION_KEY];
+  const attrs = handlerInput.attributesManager.getSessionAttributes();
+  if (!attrs[SESSION_STATE_KEY]) attrs[SESSION_STATE_KEY] = {};
+  return attrs[SESSION_STATE_KEY];
 }
 
-function slotValue(handlerInput, name) {
-  return Alexa.getSlotValue(handlerInput.requestEnvelope, name);
+function speakRecipeIntro(recipe) {
+  return `${recipe.name}. ${recipe.prepTimeMinutes} minutes, serves ${recipe.serves}. ` +
+    `You can say "next step", "set a timer for 5 minutes", or "what step am I on".`;
 }
-
-/** Attach speech, reprompt and an optional APL document in one place. */
-function buildResponse(handlerInput, out) {
-  let rb = handlerInput.responseBuilder.speak(out.speech);
-  if (out.reprompt) rb = rb.reprompt(out.reprompt);
-  if (out.document) {
-    rb = rb.addDirective({
-      type: "Alexa.Presentation.APL.RenderDocument",
-      token: APL_TOKEN,
-      document: out.document,
-      datasources: out.datasource
-    });
-  }
-  return rb.getResponse();
-}
-
-/* -------------------------------- intents ------------------------------- */
 
 const LaunchRequestHandler = {
-  canHandle(h) { return Alexa.getRequestType(h.requestEnvelope) === "LaunchRequest"; },
-  handle(h) { return buildResponse(h, R.buildLaunch(state(h))); }
-};
-
-const StartCookingIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "StartCookingIntent"; },
-  handle(h) { return buildResponse(h, R.buildStartCooking(slotValue(h, "recipe"), state(h))); }
-};
-
-const WhatDoIHaveIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "WhatDoIHaveIntent"; },
-  handle(h) { return buildResponse(h, R.buildWhatDoIHave(slotValue(h, "ingredients"), state(h))); }
-};
-
-const NextMatchIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "NextMatchIntent"; },
-  handle(h) { return buildResponse(h, R.buildNextMatch(state(h))); }
-};
-
-const SubstituteIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "SubstituteIntent"; },
-  handle(h) { return buildResponse(h, R.buildSubstitute(slotValue(h, "ingredient"), state(h))); }
-};
-
-const ExcludeIngredientIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "ExcludeIngredientIntent"; },
-  handle(h) { return buildResponse(h, R.buildExclude(slotValue(h, "ingredient"), state(h))); }
-};
-
-const NextStepIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "NextStepIntent"; },
-  handle(h) { return buildResponse(h, R.buildNextStep(state(h))); }
-};
-
-const RepeatStepIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "RepeatStepIntent"; },
-  handle(h) { return buildResponse(h, R.buildRepeatStep(state(h))); }
-};
-
-// "I'm vegan" / "I'm allergic to dairy" — remembered for the whole session
-// and (optionally) persisted across sessions.
-const SetProfileIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "SetProfileIntent"; },
-  handle(h) {
-    return buildResponse(h, R.buildSetProfile(
-      slotValue(h, "diet"), slotValue(h, "allergen"), state(h), false));
-  }
-};
-
-const ClearProfileIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "ClearProfileIntent"; },
-  handle(h) {
-    const s = state(h);
-    s.diets = [];
-    s.allergens = [];
-    return h.responseBuilder
-      .speak("<speak>Okay, I cleared your diet and allergy preferences.</speak>")
+  canHandle(handlerInput) { return Alexa.getRequestType(handlerInput.requestEnvelope) === "LaunchRequest"; },
+  handle(handlerInput) {
+    const s = state(handlerInput);
+    s.recipeId = null; s.step = 0;
+    const meals = listRecipes();
+    const names = meals.map(m => m.name).join(", ");
+    return handlerInput.responseBuilder
+      .speak(`Welcome to CookAlong TV! I have ${meals.length} recipes: ${names}. Say "cook tomato basil pasta", or "what can I make".`)
+      .reprompt("Which recipe would you like to cook?")
       .getResponse();
   }
 };
 
-// Yes -> start the currently recommended match ("cook it" equivalent).
-const YesIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "AMAZON.YesIntent"; },
-  handle(h) {
-    const s = state(h);
-    if (s.awaitingCook && Array.isArray(s.matchIds) && s.matchIds.length) {
-      return buildResponse(h, R.buildStartCooking(s.matchIds[s.matchIndex || 0], s));
+const StartCookingIntentHandler = {
+  canHandle(handlerInput) {
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === "IntentRequest" &&
+      Alexa.getIntentName(handlerInput.requestEnvelope) === "StartCookingIntent";
+  },
+  handle(handlerInput) {
+    const s = state(handlerInput);
+    const slot = Alexa.getSlotValue(handlerInput.requestEnvelope, "recipe");
+    if (!slot) {
+      return handlerInput.responseBuilder.speak("Which recipe would you like to cook?").reprompt("Tell me a recipe name, like tomato basil pasta.").getResponse();
     }
-    return buildResponse(h, { speech: "<speak>Sorry, I didn't have a question pending. Say help for options.</speak>" });
+    const recipe = findRecipe(slot);
+    if (!recipe) {
+      return handlerInput.responseBuilder
+        .speak(`I couldn't find a recipe called ${slot}. Try tomato basil pasta, vegetable stir fry, garlic chicken rice, or fluffy french toast.`)
+        .reprompt("Which recipe would you like to cook?").getResponse();
+    }
+    s.recipeId = recipe.id; s.step = 0;
+    return handlerInput.responseBuilder
+      .speak(`Starting ${speakRecipeIntro(recipe)} ${formatStep(recipe, 1)}`)
+      .reprompt("Say next step when you are ready.").getResponse();
   }
 };
 
-const NoIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "AMAZON.NoIntent"; },
-  handle(h) {
-    state(h).awaitingCook = false;
-    return buildResponse(h, {
-      speech: "<speak>No problem. Tell me more ingredients, or name a recipe to cook.</speak>",
-      reprompt: "What would you like to do?"
-    });
+const NextStepIntentHandler = {
+  canHandle(handlerInput) {
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === "IntentRequest" &&
+      Alexa.getIntentName(handlerInput.requestEnvelope) === "NextStepIntent";
+  },
+  handle(handlerInput) {
+    const s = state(handlerInput);
+    const recipe = s.recipeId ? getRecipe(s.recipeId) : null;
+    if (!recipe) {
+      return handlerInput.responseBuilder.speak("You haven't started a recipe yet. Say cook tomato basil pasta to begin.").reprompt("Say start cooking to begin a recipe.").getResponse();
+    }
+    if (s.step >= recipe.steps.length - 1) {
+      return handlerInput.responseBuilder.speak(`That was the last step. Enjoy your ${recipe.name}! Say "start over" to cook again.`).getResponse();
+    }
+    s.step += 1;
+    return handlerInput.responseBuilder.speak(formatStep(recipe, s.step + 1)).reprompt("Say next step when you are ready.").getResponse();
+  }
+};
+
+const RepeatStepIntentHandler = {
+  canHandle(handlerInput) {
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === "IntentRequest" &&
+      Alexa.getIntentName(handlerInput.requestEnvelope) === "RepeatStepIntent";
+  },
+  handle(handlerInput) {
+    const s = state(handlerInput);
+    const recipe = s.recipeId ? getRecipe(s.recipeId) : null;
+    if (!recipe) return handlerInput.responseBuilder.speak("You haven't started a recipe yet.").getResponse();
+    return handlerInput.responseBuilder.speak(formatStep(recipe, s.step + 1)).getResponse();
   }
 };
 
 const SetTimerIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "SetTimerIntent"; },
-  handle(h) {
-    const seconds = parseDuration(slotValue(h, "duration") || "");
+  canHandle(handlerInput) {
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === "IntentRequest" &&
+      Alexa.getIntentName(handlerInput.requestEnvelope) === "SetTimerIntent";
+  },
+  handle(handlerInput) {
+    const durationText = Alexa.getSlotValue(handlerInput.requestEnvelope, "duration");
+    const seconds = parseDuration(durationText || "");
     if (!seconds) {
-      return h.responseBuilder
-        .speak("I didn't catch the time. Say something like, set a timer for 5 minutes.")
-        .reprompt("How long should the timer be?").getResponse();
+      return handlerInput.responseBuilder.speak("I didn't catch the time. Say something like, set a timer for 5 minutes.").reprompt("How long should the timer be?").getResponse();
     }
     const timer = new Timer(seconds);
     timer.start();
-    // On a certified skill the on-device timer is delegated via
-    // Alexa.TimerController; here we confirm the parsed spoken duration.
-    return h.responseBuilder.speak(`Timer set for ${timer.speak()}. Say cancel timer to stop it.`).getResponse();
+    return handlerInput.responseBuilder.speak(`Timer set for ${timer.speak()}. Say "cancel timer" to stop it.`).getResponse();
   }
 };
 
 const CancelTimerIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "CancelTimerIntent"; },
-  handle(h) { return h.responseBuilder.speak("Timer cancelled.").getResponse(); }
+  canHandle(handlerInput) {
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === "IntentRequest" &&
+      Alexa.getIntentName(handlerInput.requestEnvelope) === "CancelTimerIntent";
+  },
+  handle(handlerInput) {
+    return handlerInput.responseBuilder.speak("Timer cancelled. Say set a timer for 5 minutes to start a new one.").getResponse();
+  }
 };
 
 const DietFilterIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "DietFilterIntent"; },
-  handle(h) {
-    const diet = (slotValue(h, "diet") || "").toLowerCase();
+  canHandle(handlerInput) {
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === "IntentRequest" &&
+      Alexa.getIntentName(handlerInput.requestEnvelope) === "DietFilterIntent";
+  },
+  handle(handlerInput) {
+    const diet = Alexa.getSlotValue(handlerInput.requestEnvelope, "diet");
+    if (!diet) return handlerInput.responseBuilder.speak("Which diet? Vegetarian, vegan, or gluten-free.").getResponse();
     const matches = listRecipes(diet);
-    if (!matches.length) return h.responseBuilder.speak(`Sorry, I don't have ${diet} recipes right now.`).getResponse();
+    if (!matches.length) return handlerInput.responseBuilder.speak(`Sorry, I don't have ${diet} recipes right now.`).getResponse();
     const names = matches.map(m => m.name).join(", ");
-    return h.responseBuilder
-      .speak(`Here are the ${diet} recipes: ${names}. Say one to start cooking.`)
-      .reprompt("Say a recipe name to begin.").getResponse();
+    return handlerInput.responseBuilder.speak(`Here are the ${diet} recipes: ${names}. Say one to start cooking.`).getResponse();
   }
 };
 
 const HelpIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "AMAZON.HelpIntent"; },
-  handle(h) { return h.responseBuilder.speak(R.HELP_SPEECH).reprompt("What would you like to cook?").getResponse(); }
-};
-
-const CancelAndStopIntentHandler = {
-  canHandle(h) {
-    return ["AMAZON.CancelIntent", "AMAZON.StopIntent"].includes(Alexa.getIntentName(h.requestEnvelope));
+  canHandle(handlerInput) {
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === "IntentRequest" &&
+      Alexa.getIntentName(handlerInput.requestEnvelope) === "AMAZON.HelpIntent";
   },
-  handle(h) { return h.responseBuilder.speak("Goodbye! Enjoy your cooking.").withShouldEndSession(true).getResponse(); }
-};
-
-const SessionEndedRequestHandler = {
-  canHandle(h) { return Alexa.getRequestType(h.requestEnvelope) === "SessionEndedRequest"; },
-  handle(h) {
-    console.log(`Session ended: ${h.requestEnvelope.request.reason}`);
-    return h.responseBuilder.getResponse();
+  handle(handlerInput) {
+    return handlerInput.responseBuilder.speak("CookAlong TV helps you cook hands-free. Say cook tomato basil pasta to start, next step to continue, set a timer for 5 minutes for timers, or filter recipes by vegan.").reprompt("What would you like to cook?").getResponse();
   }
 };
 
+const CancelAndStopIntentHandler = {
+  canHandle(handlerInput) {
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === "IntentRequest" &&
+      (Alexa.getIntentName(handlerInput.requestEnvelope) === "AMAZON.CancelIntent" ||
+        Alexa.getIntentName(handlerInput.requestEnvelope) === "AMAZON.StopIntent");
+  },
+  handle(handlerInput) { return handlerInput.responseBuilder.speak("Goodbye! Enjoy your cooking.").getResponse(); }
+};
+
+const SessionEndedRequestHandler = {
+  canHandle(handlerInput) { return Alexa.getRequestType(handlerInput.requestEnvelope) === "SessionEndedRequest"; },
+  handle(handlerInput) { return handlerInput.responseBuilder.getResponse(); }
+};
+
 const FallbackIntentHandler = {
-  canHandle(h) { return Alexa.getIntentName(h.requestEnvelope) === "AMAZON.FallbackIntent"; },
-  handle(h) { return h.responseBuilder.speak(R.FALLBACK_SPEECH).reprompt("What would you like to do?").getResponse(); }
+  canHandle(handlerInput) {
+    return Alexa.getRequestType(handlerInput.requestEnvelope) === "IntentRequest" &&
+      Alexa.getIntentName(handlerInput.requestEnvelope) === "AMAZON.FallbackIntent";
+  },
+  handle(handlerInput) {
+    return handlerInput.responseBuilder.speak("I didn't understand that. Try cook tomato basil pasta, next step, or set a timer for 5 minutes.").reprompt("What would you like to do?").getResponse();
+  }
 };
 
 const ErrorHandler = {
   canHandle() { return true; },
-  handle(h, error) {
-    console.error(`Error handled: ${(error && error.stack) || error}`);
-    return h.responseBuilder.speak("Sorry, something went wrong. Please try again.").reprompt("Please try again.").getResponse();
+  handle(handlerInput, error) {
+    console.error(`Error handled: ${error.message}`);
+    return handlerInput.responseBuilder.speak("Sorry, something went wrong. Please try again.").reprompt("Please try again.").getResponse();
   }
 };
 
-/* ------------------------------ skill builder --------------------------- */
-
-// Persistent storage is wired only when a DynamoDB table name is provided, so
-// local tests and Alexa-hosted deployments both work out of the box.
-function buildSkill() {
-  const builder = Alexa.SkillBuilders.custom();
-  try {
-    if (process.env.DYNAMODB_TABLE) {
-      // eslint-disable-next-line global-require
-      const { DynamoDbPersistenceAdapter } = require("ask-sdk-dynamodb-persistence-adapter");
-      builder.withPersistenceAdapter(new DynamoDbPersistenceAdapter({
-        tableName: process.env.DYNAMODB_TABLE,
-        createTable: true
-      }));
-    }
-  } catch (e) {
-    console.warn("DynamoDB persistence unavailable, continuing session-only:", e.message);
-  }
-  return builder
-    .addRequestInterceptors(LoadStateInterceptor)
-    .addResponseInterceptors(SaveProfileInterceptor)
-    .addRequestHandlers(
-      LaunchRequestHandler,
-      SetProfileIntentHandler,
-      ClearProfileIntentHandler,
-      StartCookingIntentHandler,
-      WhatDoIHaveIntentHandler,
-      NextMatchIntentHandler,
-      SubstituteIntentHandler,
-      ExcludeIngredientIntentHandler,
-      NextStepIntentHandler,
-      RepeatStepIntentHandler,
-      YesIntentHandler,
-      NoIntentHandler,
-      SetTimerIntentHandler,
-      CancelTimerIntentHandler,
-      DietFilterIntentHandler,
-      HelpIntentHandler,
-      CancelAndStopIntentHandler,
-      FallbackIntentHandler,
-      SessionEndedRequestHandler
-    )
-    .addErrorHandlers(ErrorHandler)
-    .lambda();
-}
-
-exports.handler = buildSkill();
-exports._internal = { buildResponse, state, LoadStateInterceptor, SaveProfileInterceptor };
+exports.handler = Alexa.SkillBuilders.custom()
+  .addRequestHandlers(
+    LaunchRequestHandler, StartCookingIntentHandler, NextStepIntentHandler,
+    RepeatStepIntentHandler, SetTimerIntentHandler, CancelTimerIntentHandler,
+    DietFilterIntentHandler, HelpIntentHandler, CancelAndStopIntentHandler,
+    FallbackIntentHandler, SessionEndedRequestHandler
+  )
+  .addErrorHandlers(ErrorHandler)
+  .lambda();
