@@ -4,9 +4,10 @@
  * CookAlong TV - Recipe engine
  *
  * Canonical 10-recipe dataset with structured ingredients (canonical ids,
- * roles and pantry flags) and diet/allergen-tagged substitution overrides.
- * Consumed by the Fire TV Web App (via public/recipes-data.js), the
- * ingredient-intelligence engine (src/ingredients.js) and the Alexa skill.
+ * roles and pantry flags), diet/allergen-tagged substitution overrides and
+ * per-serving nutrition estimates. Consumed by the Fire TV Web App (via
+ * public/recipes-data.js), the ingredient-intelligence engine
+ * (src/ingredients.js) and the Alexa skill.
  */
 
 const DIETS = ["vegetarian", "vegan", "gluten-free"];
@@ -14,6 +15,7 @@ const DIETS = ["vegetarian", "vegan", "gluten-free"];
 const RECIPES = [
   {
     id: "tomato-basil-pasta",
+    nutrition: {"kcal": 550, "protein": 14, "carbs": 95, "fat": 12},
     name: "Tomato Basil Pasta",
     diet: ["vegetarian", "vegan"],
     prepTimeMinutes: 20,
@@ -39,6 +41,7 @@ const RECIPES = [
   },
   {
     id: "vegetable-stir-fry",
+    nutrition: {"kcal": 380, "protein": 10, "carbs": 60, "fat": 12},
     name: "Vegetable Stir Fry",
     diet: ["vegetarian", "vegan", "gluten-free"],
     prepTimeMinutes: 15,
@@ -65,6 +68,7 @@ const RECIPES = [
   },
   {
     id: "garlic-chicken-rice",
+    nutrition: {"kcal": 620, "protein": 38, "carbs": 72, "fat": 18},
     name: "Garlic Chicken Rice",
     diet: [],
     prepTimeMinutes: 35,
@@ -90,6 +94,7 @@ const RECIPES = [
   },
   {
     id: "fluffy-french-toast",
+    nutrition: {"kcal": 450, "protein": 14, "carbs": 60, "fat": 17},
     name: "Fluffy French Toast",
     diet: ["vegetarian"],
     prepTimeMinutes: 15,
@@ -114,6 +119,7 @@ const RECIPES = [
   },
   {
     id: "mushroom-risotto",
+    nutrition: {"kcal": 520, "protein": 16, "carbs": 70, "fat": 20},
     name: "Creamy Mushroom Risotto",
     diet: ["vegetarian", "gluten-free"],
     prepTimeMinutes: 30,
@@ -148,6 +154,7 @@ const RECIPES = [
   },
   {
     id: "tofu-scramble",
+    nutrition: {"kcal": 320, "protein": 22, "carbs": 18, "fat": 18},
     name: "Turmeric Tofu Scramble",
     diet: ["vegetarian", "vegan", "gluten-free"],
     prepTimeMinutes: 12,
@@ -173,6 +180,7 @@ const RECIPES = [
   },
   {
     id: "beef-broccoli",
+    nutrition: {"kcal": 540, "protein": 42, "carbs": 45, "fat": 20},
     name: "Beef and Broccoli",
     diet: [],
     prepTimeMinutes: 20,
@@ -199,6 +207,7 @@ const RECIPES = [
   },
   {
     id: "banana-oat-pancakes",
+    nutrition: {"kcal": 430, "protein": 15, "carbs": 70, "fat": 12},
     name: "Banana Oat Pancakes",
     diet: ["vegetarian"],
     prepTimeMinutes: 15,
@@ -223,6 +232,7 @@ const RECIPES = [
   },
   {
     id: "lemon-garlic-shrimp",
+    nutrition: {"kcal": 380, "protein": 38, "carbs": 30, "fat": 12},
     name: "Lemon Garlic Shrimp",
     diet: ["gluten-free"],
     prepTimeMinutes: 20,
@@ -248,6 +258,7 @@ const RECIPES = [
   },
   {
     id: "hearty-chicken-soup",
+    nutrition: {"kcal": 350, "protein": 32, "carbs": 30, "fat": 12},
     name: "Hearty Chicken Soup",
     diet: ["gluten-free"],
     prepTimeMinutes: 40,
@@ -291,12 +302,18 @@ function recipeSummary(recipe) {
   };
 }
 
+/**
+ * Resolve a recipe by id OR display name (case-insensitive).
+ * The Alexa layer passes display names ("creamy mushroom risotto"),
+ * while session state stores ids ("mushroom-risotto").
+ */
 function getRecipe(query) {
   if (!query) return null;
   const q = String(query).toLowerCase().trim();
   return RECIPES.find(r => r.id === q || r.name.toLowerCase() === q) || null;
 }
 
+/** Alias kept for skill handlers that match Alexa slot values. */
 function findRecipe(query) {
   return getRecipe(query);
 }
