@@ -1,23 +1,9 @@
 "use strict";
 
-/**
- * CookAlong TV - Smart timer engine
- * Parses natural-language durations ("5 minutes", "one minute thirty
- * seconds") into seconds and provides a stateful timer used by the
- * Alexa skill and mirrored in the Fire TV Web App.
- */
-
 const UNIT_SECONDS = {
-  second: 1,
-  seconds: 1,
-  sec: 1,
-  secs: 1,
-  minute: 60,
-  minutes: 60,
-  min: 60,
-  mins: 60,
-  hour: 3600,
-  hours: 3600
+  second: 1, seconds: 1, sec: 1, secs: 1,
+  minute: 60, minutes: 60, min: 60, mins: 60,
+  hour: 3600, hours: 3600
 };
 
 const NUMBER_WORDS = {
@@ -36,24 +22,24 @@ function parseNumber(token) {
   return null;
 }
 
-/**
- * Parse a spoken or typed duration into total seconds.
- * @param {string} text e.g. "5 minutes", "1 hour 30 minutes", "ninety seconds"
- * @returns {number|null} seconds, or null when unparseable
- */
+function parseISODuration(text) {
+  const parts = /^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/i.exec(String(text).trim());
+  if (!parts) return null;
+  const hours = parseInt(parts[1] || "0", 10);
+  const minutes = parseInt(parts[2] || "0", 10);
+  const seconds = parseInt(parts[3] || "0", 10);
+  const total = hours * 3600 + minutes * 60 + seconds;
+  return total > 0 ? total : null;
+}
+
 function parseDuration(text) {
   if (!text) return null;
-  const tokens = String(text)
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim()
-    .split(" ");
-
+  const iso = parseISODuration(text);
+  if (iso !== null) return iso;
+  const tokens = String(text).toLowerCase().replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim().split(" ");
   let seconds = 0;
   let currentNumber = null;
   let matched = false;
-
   for (const token of tokens) {
     const unit = UNIT_SECONDS[token];
     if (unit !== undefined) {
@@ -63,83 +49,46 @@ function parseDuration(text) {
       matched = true;
     } else {
       const n = parseNumber(token);
-      if (n !== null) {
-        currentNumber = n;
-      } else if (token === "and" || token === "a") {
-        if (token === "a" && currentNumber === null) currentNumber = 1;
-      }
+      if (n !== null) currentNumber = n;
+      else if (token === "and" || token === "a") { if (token === "a" && currentNumber === null) currentNumber = 1; }
     }
   }
-
   if (!matched && seconds === 0) return null;
   if (seconds === 0) return null;
   return seconds;
 }
 
-/**
- * Simple stateful timer.
- */
 class Timer {
   constructor(durationSeconds, onTick = null) {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-      throw new Error("Timer duration must be a positive number of seconds");
-    }
+    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) throw new Error("Timer duration must be a positive number of seconds");
     this.totalSeconds = Math.round(durationSeconds);
     this.remainingSeconds = this.totalSeconds;
-    this.state = "idle"; // idle | running | paused | done
+    this.state = "idle";
     this._onTick = onTick;
     this._handle = null;
   }
-
   start() {
     if (this.state === "running") return this;
-    if (this.remainingSeconds <= 0) {
-      this.state = "done";
-      return this;
-    }
+    if (this.remainingSeconds <= 0) { this.state = "done"; return this; }
     this.state = "running";
     this._tick();
     return this;
   }
-
   _tick() {
     if (this.state !== "running") return;
-    if (this.remainingSeconds <= 0) {
-      this.state = "done";
-      if (this._onTick) this._onTick(this);
-      return;
-    }
+    if (this.remainingSeconds <= 0) { this.state = "done"; if (this._onTick) this._onTick(this); return; }
     if (this._onTick) this._onTick(this);
-    this._handle = setTimeout(() => {
-      this.remainingSeconds -= 1;
-      this._tick();
-    }, 1000);
+    this._handle = setTimeout(() => { this.remainingSeconds -= 1; this._tick(); }, 1000);
   }
-
-  pause() {
-    if (this._handle) clearTimeout(this._handle);
-    if (this.state === "running") this.state = "paused";
-    return this;
-  }
-
-  resume() {
-    return this.start();
-  }
-
-  stop() {
-    if (this._handle) clearTimeout(this._handle);
-    this.remainingSeconds = 0;
-    this.state = "done";
-    return this;
-  }
-
+  pause() { if (this._handle) clearTimeout(this._handle); if (this.state === "running") this.state = "paused"; return this; }
+  resume() { return this.start(); }
+  stop() { if (this._handle) clearTimeout(this._handle); this.remainingSeconds = 0; this.state = "done"; return this; }
   format() {
     const total = Math.max(0, this.remainingSeconds);
     const m = Math.floor(total / 60);
     const s = total % 60;
     return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   }
-
   speak() {
     const total = Math.max(0, this.remainingSeconds);
     const m = Math.floor(total / 60);
