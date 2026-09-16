@@ -229,26 +229,27 @@
       kitchenResults.innerHTML = `<p class="kitchen-empty">I couldn't recognise any ingredients. Try things like “chicken, garlic, rice”${unknown.length ? ` — I didn't get: ${unknown.join(", ")}` : ""}.</p>`;
       return;
     }
-    const matches = engine.topMatches(recognized, recipes, 25, 5);
+    const profile = activeDiet === "any" ? undefined : { diets: [activeDiet], allergens: [] };
+    const matches = engine.topMatches(recognized, recipes, 25, 5, profile);
     if (!matches.length) {
       kitchenResults.innerHTML = `<p class="kitchen-empty">Nothing scores high enough with only: ${recognized.map(engine.displayName).join(", ")}. Add more ingredients for better matches.</p>`;
       return;
     }
     kitchenResults.innerHTML = "";
-    matches.forEach(m => kitchenResults.appendChild(kitchenMatchCard(m)));
+    matches.forEach(m => kitchenResults.appendChild(kitchenMatchCard(m, profile)));
     speak(`I found ${matches.length} recipes you can make.`);
     setVoiceStatus(`Found ${matches.length} matches for your kitchen`);
     showToast(`🧺 ${matches.length} recipe${matches.length > 1 ? "s" : ""} matched`, 3000);
   }
 
-  function kitchenMatchCard(m) {
+  function kitchenMatchCard(m, profile) {
     const r = m.recipe;
     const card = document.createElement("article");
     card.className = "match-card";
     card.tabIndex = 0;
     const have = m.matched.map(engine.displayName).join(", ");
     const swaps = m.missingSubstitutable.map(c => {
-      const sub = engine.findSubstitute(r, c, { diets: [], allergens: [] });
+      const sub = engine.findSubstitute(r, c, profile);
       return `${engine.displayName(c)} → ${sub ? sub.name : "swap"}`;
     });
     const missing = m.missingHard.map(engine.displayName).join(", ");
