@@ -47,13 +47,14 @@ npm run serve      # requires npx
 ```
 
 Open http://localhost:8080 in a browser (or load `public/index.html` directly).
-Try the **"What's in my kitchen"** tab: add `mushrooms, rice, onion, garlic`,
-open the top match, and hit **Swap** on the missing ingredients.
+Try the **"What's in my kitchen"** panel: add `mushrooms, rice, onion, garlic`,
+open the top match, and hit **Cook it** — every missing item is flagged as
+swappable or missing on the match card.
 
 ## Running tests
 
 ```bash
-npm test           # runs all unit tests (node --test), 31 tests
+npm test           # runs all unit tests (node --test), 66 tests
 ```
 
 ## Alexa skill
