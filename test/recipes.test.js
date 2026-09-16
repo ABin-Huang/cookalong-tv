@@ -43,3 +43,12 @@ test("formatStep out of range returns null", () => {
   assert.strictEqual(formatStep(r, 0), null);
   assert.strictEqual(formatStep(r, r.steps.length + 1), null);
 });
+
+test("findRecipe matches by display name (Alexa slot format)", () => {
+  const { findRecipe } = require("../src/recipes");
+  assert.strictEqual(findRecipe("tomato basil pasta").id, "tomato-basil-pasta");
+  assert.strictEqual(findRecipe("Garlic Chicken Rice").id, "garlic-chicken-rice");
+  assert.strictEqual(findRecipe("tomato-basil-pasta").id, "tomato-basil-pasta");
+  assert.strictEqual(findRecipe("sushi"), null);
+  assert.strictEqual(findRecipe(""), null);
+});

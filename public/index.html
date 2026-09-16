@@ -11,7 +11,10 @@
   <header id="topbar">
     <h1 class="logo">🍳 CookAlong <span>TV</span></h1>
     <div id="voice-status" class="voice-status" aria-live="polite">
-      <span class="pulse"></span> Say "Alexa, open CookAlong" — or just use the remote
+      <span class="pulse"></span> <span id="voice-text">Say "Alexa, open CookAlong" — or just use the remote</span>
+      <button id="btn-voice" class="mic" title="Try voice control (browser demo)">
+        <span id="mic-icon">🎙</span><span id="mic-label">Voice</span>
+      </button>
     </div>
   </header>
 
@@ -23,12 +26,24 @@
       <button class="chip" data-diet="gluten-free">Gluten-free</button>
     </section>
     <section id="recipe-grid" class="grid" aria-label="Recipe list"></section>
+    <aside id="voice-cheatsheet" class="cheatsheet">
+      <h4>🎙 Voice commands (demo)</h4>
+      <ul>
+        <li>"cook <em>tomato basil pasta</em>" — open a recipe</li>
+        <li>"next step" / "previous step"</li>
+        <li>"repeat step"</li>
+        <li>"set a timer" / "start timer" / "pause timer"</li>
+        <li>"filter vegan" / "vegetarian" / "gluten-free"</li>
+      </ul>
+    </aside>
   </main>
 
   <main id="view-recipe" class="view hidden">
     <button id="btn-back" class="btn-back">← All recipes</button>
     <h2 id="recipe-title"></h2>
     <p id="recipe-meta" class="meta"></p>
+
+    <div id="progress" class="progress" aria-label="Step progress"></div>
 
     <section id="step-card" class="step-card">
       <div class="step-number" id="step-label">Step 1</div>
@@ -37,7 +52,8 @@
 
     <div class="controls">
       <button id="btn-prev" class="btn">◀ Previous</button>
-      <button id="btn-timer" class="btn primary">⏱ Set timer 5:00</button>
+      <button id="btn-timer" class="btn primary">⏱ Set timer</button>
+      <button id="btn-speak" class="btn">🔊 Read step</button>
       <button id="btn-next" class="btn">Next ▶</button>
     </div>
 

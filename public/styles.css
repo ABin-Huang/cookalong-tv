@@ -61,6 +61,25 @@ body {
   100% { box-shadow: 0 0 0 0 rgba(61,220,132,0); }
 }
 
+.mic {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--panel-2);
+  color: var(--text);
+  border: 2px solid #33404d;
+  border-radius: 999px;
+  padding: 8px 18px;
+  font-size: 18px;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.mic:hover { border-color: var(--accent); }
+.mic.active { background: var(--accent); border-color: var(--accent); color: #16110c; animation: micpulse 1.2s infinite; }
+@keyframes micpulse {
+  50% { box-shadow: 0 0 0 10px rgba(255,140,66,.25); }
+}
+
 .view { padding: 28px 48px 80px; }
 
 .filters { display: flex; gap: 16px; flex-wrap: wrap; margin-bottom: 28px; }
@@ -105,6 +124,24 @@ body {
 .card-diet { margin-top: 12px; color: var(--accent-2); font-size: 18px; text-transform: capitalize; }
 .empty { color: var(--muted); font-size: 24px; }
 
+.cheatsheet {
+  margin-top: 34px;
+  background: var(--panel);
+  border: 1px solid #2a333d;
+  border-left: 6px solid var(--accent-2);
+  border-radius: 14px;
+  padding: 20px 28px;
+  max-width: 720px;
+}
+.cheatsheet h4 { font-size: 22px; margin-bottom: 10px; color: var(--accent-2); }
+.cheatsheet ul { list-style: none; }
+.cheatsheet li {
+  font-size: 19px;
+  color: var(--muted);
+  padding: 4px 0;
+}
+.cheatsheet em { color: var(--text); font-style: normal; }
+
 .hidden { display: none !important; }
 
 .btn-back {
@@ -119,6 +156,20 @@ body {
 
 #recipe-title { font-size: 44px; margin-bottom: 6px; }
 .meta { color: var(--muted); font-size: 22px; margin-bottom: 26px; }
+
+.progress {
+  display: flex;
+  gap: 10px;
+  margin-bottom: 20px;
+  flex-wrap: wrap;
+}
+.dot {
+  width: 14px; height: 14px;
+  border-radius: 50%;
+  background: #33404d;
+  transition: background .2s ease, transform .2s ease;
+}
+.dot.done { background: var(--accent); transform: scale(1.15); }
 
 .step-card {
   background: var(--panel);

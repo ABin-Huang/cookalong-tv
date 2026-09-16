@@ -2,8 +2,9 @@
 
 /**
  * CookAlong TV — Fire TV Web App front-end logic.
- * Recipe browsing, step-by-step view and a smart timer, optimized for
- * the 10-foot TV experience. Designed to work with the Alexa+ voice layer.
+ * Recipe browsing, step-by-step view, smart timer and an in-browser voice
+ * demo (Web Speech API) that mirrors the Alexa+ hands-free experience:
+ * speak a command ("next step", "set a timer") and the app responds.
  */
 (() => {
   const recipes = window.COOKALONG_RECIPES || [];
@@ -18,6 +19,7 @@
   let currentRecipe = null;
   let currentStep = 0; // 0-based
   let timer = null;
+  let voiceListening = false;
 
   /* ---------- rendering ---------- */
 
@@ -59,14 +61,17 @@
     currentRecipe = recipes.find(r => r.id === id) || null;
     if (!currentRecipe) return;
     currentStep = 0;
-    if (timer) { timer.stop(); timer = null; hideTimer(); }
+    pauseTimer();
+    hideTimer();
     viewHome.classList.add("hidden");
     viewRecipe.classList.remove("hidden");
     $("recipe-title").textContent = currentRecipe.name;
     $("recipe-meta").textContent =
       `${currentRecipe.prepTimeMinutes} min · serves ${currentRecipe.serves}`;
     renderStep();
+    renderProgress();
     window.scrollTo(0, 0);
+    speak(`Starting ${currentRecipe.name}. ${currentRecipe.steps[0]}`, true);
   }
 
   function renderStep() {
@@ -76,7 +81,17 @@
     $("step-text").textContent = currentRecipe.steps[currentStep];
     $("btn-prev").disabled = currentStep === 0;
     $("btn-next").disabled = currentStep === total - 1;
+    updateTimerButton();
+    renderProgress();
     showToast(`${currentRecipe.name} — Step ${currentStep + 1}`);
+  }
+
+  function renderProgress() {
+    const box = $("progress");
+    if (!currentRecipe) { box.innerHTML = ""; return; }
+    box.innerHTML = currentRecipe.steps
+      .map((_, i) => `<span class="dot ${i <= currentStep ? "done" : ""}"></span>`)
+      .join("");
   }
 
   /* ---------- timer ---------- */
@@ -84,6 +99,18 @@
   function defaultTimerSeconds() {
     const min = (currentRecipe && currentRecipe.prepTimeMinutes) || 5;
     return Math.max(60, Math.min(30 * 60, min * 60));
+  }
+
+  function fmt(seconds) {
+    const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
+    const ss = String(seconds % 60).padStart(2, "0");
+    return `${mm}:${ss}`;
+  }
+
+  function updateTimerButton() {
+    const btn = $("btn-timer");
+    if (!currentRecipe) return;
+    btn.textContent = `⏱ Set timer ${fmt(defaultTimerSeconds())}`;
   }
 
   function showTimer() {
@@ -95,18 +122,17 @@
   }
 
   function setTimerSeconds(seconds) {
-    if (timer) timer.stop();
+    pauseTimer();
     const time = $("timer-time");
-    const mm = String(Math.floor(seconds / 60)).padStart(2, "0");
-    const ss = String(seconds % 60).padStart(2, "0");
-    time.textContent = `${mm}:${ss}`;
+    time.textContent = fmt(seconds);
     time.dataset.seconds = seconds;
   }
 
   function startTimer() {
-    const seconds = parseInt($("timer-time").dataset.seconds || defaultTimerSeconds(), 10);
     const time = $("timer-time");
+    if (!time.dataset.seconds) setTimerSeconds(defaultTimerSeconds());
     showTimer();
+    if (timer) { clearInterval(timer); timer = null; }
     timer = setInterval(() => {
       let remaining = parseInt(time.dataset.seconds, 10);
       remaining -= 1;
@@ -114,14 +140,154 @@
         clearInterval(timer);
         timer = null;
         time.textContent = "00:00";
+        speak("Timer done! Time to check your food.");
         showToast("⏰ Timer done! Time to check your food.", 6000);
         return;
       }
       time.dataset.seconds = remaining;
-      const mm = String(Math.floor(remaining / 60)).padStart(2, "0");
-      const ss = String(remaining % 60).padStart(2, "0");
-      time.textContent = `${mm}:${ss}`;
+      time.textContent = fmt(remaining);
     }, 1000);
+  }
+
+  function pauseTimer() {
+    if (timer) { clearInterval(timer); timer = null; }
+  }
+
+  function resetTimer() {
+    pauseTimer();
+    setTimerSeconds(defaultTimerSeconds());
+  }
+
+  /* ---------- speech (TTS + voice commands demo) ---------- */
+
+  let voices = [];
+  function loadVoices() {
+    voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : [];
+  }
+  if (window.speechSynthesis) {
+    loadVoices();
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+  }
+
+  function pickVoice() {
+    return voices.find(v => v.lang === "en-US" && /female|Samantha|Zira|Google US English/i.test(v.name))
+      || voices.find(v => v.lang === "en-US")
+      || null;
+  }
+
+  function speak(text, interrupt = false) {
+    if (!window.speechSynthesis) return;
+    if (interrupt) window.speechSynthesis.cancel();
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.lang = "en-US";
+    utter.rate = 0.98;
+    const v = pickVoice();
+    if (v) utter.voice = v;
+    window.speechSynthesis.speak(utter);
+  }
+
+  function setVoiceStatus(text) {
+    const el = $("voice-text");
+    if (el) el.textContent = text;
+  }
+
+  function handleVoiceCommand(transcript) {
+    const t = transcript.toLowerCase();
+    // recipe opening from home
+    if (viewHome.classList.contains("hidden") === false) {
+      const recipe = recipes.find(r => t.includes(r.name.toLowerCase()));
+      if (recipe) { openRecipe(recipe.id); setVoiceStatus(`Opening ${recipe.name}`); return; }
+    }
+    // filters
+    if (t.includes("vegan")) { activateDiet("vegan"); setVoiceStatus("Filtered to vegan recipes"); return; }
+    if (t.includes("vegetarian")) { activateDiet("vegetarian"); setVoiceStatus("Filtered to vegetarian recipes"); return; }
+    if (t.includes("gluten")) { activateDiet("gluten-free"); setVoiceStatus("Filtered to gluten-free recipes"); return; }
+    if (t.includes("all recipes") || t.includes("show everything")) { activateDiet("any"); setVoiceStatus("Showing all recipes"); return; }
+    // step navigation
+    if (t.includes("next")) {
+      if (currentRecipe) {
+        if (currentStep < currentRecipe.steps.length - 1) {
+          currentStep += 1;
+          renderStep();
+          speak(`Step ${currentStep + 1}. ${currentRecipe.steps[currentStep]}`);
+          return;
+        }
+        speak(`That was the last step. Enjoy your ${currentRecipe.name}!`);
+        return;
+      }
+    }
+    if (t.includes("previous") || t.includes("back")) {
+      if (currentRecipe && currentStep > 0) {
+        currentStep -= 1;
+        renderStep();
+        speak(`Step ${currentStep + 1}. ${currentRecipe.steps[currentStep]}`);
+        return;
+      }
+    }
+    if (t.includes("repeat") || t.includes("say that again")) {
+      if (currentRecipe) { speak(currentRecipe.steps[currentStep]); setVoiceStatus("Repeating step"); return; }
+    }
+    if (t.includes("read") || t.includes("speak")) {
+      if (currentRecipe) { speak(currentRecipe.steps[currentStep]); return; }
+    }
+    // timer
+    if (t.includes("timer")) {
+      if (t.includes("set")) {
+        $("btn-timer").click();
+        const secs = defaultTimerSeconds();
+        setVoiceStatus(`Timer set for ${fmt(secs)}`);
+        speak(`Timer set for ${Math.round(secs / 60)} minutes`);
+        return;
+      }
+      if (t.includes("start")) { startTimer(); setVoiceStatus("Timer started"); return; }
+      if (t.includes("pause")) { pauseTimer(); setVoiceStatus("Timer paused"); return; }
+      if (t.includes("cancel") || t.includes("stop")) { pauseTimer(); setVoiceStatus("Timer cancelled"); return; }
+    }
+    setVoiceStatus("I didn't catch that. Try next step, or set a timer.");
+  }
+
+  function toggleVoice() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) {
+      showToast("Voice recognition isn't supported in this browser.", 4000);
+      return;
+    }
+    if (voiceListening && window.__recognition) {
+      window.__recognition.stop();
+      return;
+    }
+    const recognition = new SR();
+    recognition.lang = "en-US";
+    recognition.interimResults = false;
+    recognition.continuous = false;
+    recognition.onresult = event => {
+      const transcript = event.results[0][0].transcript;
+      showToast(`🎙 "${transcript}"`, 3000);
+      handleVoiceCommand(transcript);
+      voiceListening = false;
+      $("btn-voice").classList.remove("active");
+    };
+    recognition.onerror = () => {
+      voiceListening = false;
+      $("btn-voice").classList.remove("active");
+      setVoiceStatus("Voice error — try again");
+    };
+    recognition.onend = () => {
+      voiceListening = false;
+      $("btn-voice").classList.remove("active");
+    };
+    window.__recognition = recognition;
+    recognition.start();
+    voiceListening = true;
+    $("btn-voice").classList.add("active");
+    setVoiceStatus("Listening… speak a command");
+  }
+
+  function activateDiet(diet) {
+    activeDiet = diet;
+    filtersBox.querySelectorAll(".chip").forEach(c =>
+      c.classList.toggle("active", c.dataset.diet === diet));
+    renderGrid();
   }
 
   /* ---------- toast ---------- */
@@ -140,14 +306,12 @@
   filtersBox.addEventListener("click", e => {
     const chip = e.target.closest(".chip");
     if (!chip) return;
-    filtersBox.querySelectorAll(".chip").forEach(c => c.classList.remove("active"));
-    chip.classList.add("active");
-    activeDiet = chip.dataset.diet;
-    renderGrid();
+    activateDiet(chip.dataset.diet);
   });
 
   $("btn-back").addEventListener("click", () => {
-    if (timer) { clearInterval(timer); timer = null; hideTimer(); }
+    pauseTimer();
+    hideTimer();
     currentRecipe = null;
     viewRecipe.classList.add("hidden");
     viewHome.classList.remove("hidden");
@@ -167,13 +331,14 @@
   });
 
   $("btn-timer-start").addEventListener("click", startTimer);
-  $("btn-timer-pause").addEventListener("click", () => {
-    if (timer) { clearInterval(timer); timer = null; }
+  $("btn-timer-pause").addEventListener("click", pauseTimer);
+  $("btn-timer-reset").addEventListener("click", resetTimer);
+
+  $("btn-speak").addEventListener("click", () => {
+    if (currentRecipe) speak(currentRecipe.steps[currentStep]);
   });
-  $("btn-timer-reset").addEventListener("click", () => {
-    if (timer) { clearInterval(timer); timer = null; }
-    setTimerSeconds(defaultTimerSeconds());
-  });
+
+  $("btn-voice").addEventListener("click", toggleVoice);
 
   // Remote D-pad support (left/right = prev/next) once a recipe is open.
   document.addEventListener("keydown", e => {
