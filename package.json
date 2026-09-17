@@ -4,9 +4,10 @@
   "description": "CookAlong TV - Voice-first interactive cooking companion for Amazon Fire TV with Alexa+ integration",
   "main": "skill/index.js",
   "scripts": {
-    "pretest": "node scripts/build-web.js --check",
+    "pretest": "npm run check:syntax && node scripts/build-web.js --check",
     "test": "node --test --test-force-exit",
     "test:unit": "node --test --test-force-exit test/recipes.test.js test/timer.test.js",
+    "check:syntax": "node --check public/app.js && node --check public/sw.js && node --check skill/index.js && node --check skill/responses.js",
     "build:web": "node scripts/build-web.js",
     "check:web": "node scripts/build-web.js --check",
     "serve": "npx serve public -l 8080",

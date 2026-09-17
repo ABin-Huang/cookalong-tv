@@ -21,5 +21,7 @@ jobs:
         run: npm ci --no-audit --no-fund || npm install --no-audit --no-fund
       - name: Verify public/ artifacts match src/
         run: npm run check:web
+      - name: Syntax check browser + skill entry points
+        run: npm run check:syntax
       - name: Run unit + skill integration tests
         run: npm test
