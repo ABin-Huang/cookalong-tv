@@ -22,11 +22,12 @@ function speakText(response) {
 function invoke(event) {
   return new Promise((resolve, reject) => { handler(event, {}, (err, res) => (err ? reject(err) : resolve(res))); });
 }
-test("LaunchRequest welcomes the user with recipe names", async () => {
+test("LaunchRequest welcomes the user and offers the ways in", async () => {
   const res = await invoke(launchRequest());
   const text = speakText(res);
   assert.match(text, /Welcome to CookAlong TV/);
-  assert.match(text, /Tomato Basil Pasta/);
+  assert.match(text, /10 hands-free recipes/);
+  assert.match(text, /I have chicken and rice/);
 });
 test("StartCookingIntent starts a known recipe at step 1", async () => {
   const res = await invoke(intentRequest(null, "StartCookingIntent", { recipe: "tomato basil pasta" }));
@@ -46,7 +47,7 @@ test("NextStepIntent advances to step 2 using session state", async () => {
 });
 test("NextStepIntent without an active recipe asks to start first", async () => {
   const res = await invoke(intentRequest(null, "NextStepIntent"));
-  assert.match(speakText(res), /haven't started a recipe/);
+  assert.match(speakText(res), /have not started a recipe/);
 });
 test("SetTimerIntent accepts an ISO-8601 AMAZON.DURATION slot", async () => {
   const res = await invoke(intentRequest(null, "SetTimerIntent", { duration: "PT5M" }));

@@ -341,6 +341,29 @@ function buildNextStep(session) {
   };
 }
 
+function buildPreviousStep(session) {
+  const recipe = session.recipeId ? getRecipe(session.recipeId) : null;
+  if (!recipe) {
+    return { speech: "<speak>You have not started a recipe yet. Say cook tomato basil pasta to begin.</speak>", reprompt: "Say start cooking to begin." };
+  }
+  const steps = rewrittenSteps(recipe, session.swaps);
+  if (session.step <= 0) {
+    return {
+      speech: `<speak>This is the first step already. ${steps[0]}</speak>`,
+      reprompt: 'Say "next step" when ready.',
+      document: APL.cooking,
+      datasource: cookingDatasource(recipe, 0, session.swaps)
+    };
+  }
+  session.step -= 1;
+  return {
+    speech: `<speak>Step ${session.step + 1} of ${steps.length}: ${steps[session.step]}</speak>`,
+    reprompt: 'Say "next step" when ready.',
+    document: APL.cooking,
+    datasource: cookingDatasource(recipe, session.step, session.swaps)
+  };
+}
+
 function buildRepeatStep(session) {
   const recipe = session.recipeId ? getRecipe(session.recipeId) : null;
   if (!recipe) return { speech: "<speak>You have not started a recipe yet.</speak>" };
@@ -404,6 +427,7 @@ module.exports = {
   buildSubstitute,
   buildExclude,
   buildNextStep,
+  buildPreviousStep,
   buildRepeatStep,
   buildSetProfile,
   rewrittenSteps,

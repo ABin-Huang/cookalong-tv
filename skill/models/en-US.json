@@ -97,6 +97,19 @@
           ]
         },
         {
+          "name": "PreviousStepIntent",
+          "slots": [],
+          "samples": [
+            "previous step",
+            "go back a step",
+            "back a step",
+            "last step",
+            "step before",
+            "go back",
+            "back up"
+          ]
+        },
+        {
           "name": "RepeatStepIntent",
           "slots": [],
           "samples": [
@@ -104,8 +117,7 @@
             "say that again",
             "what step am i on",
             "repeat that",
-            "repeat",
-            "go back a step"
+            "repeat"
           ]
         },
         {
