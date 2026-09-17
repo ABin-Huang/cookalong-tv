@@ -7,6 +7,9 @@
  * driven by a wall-clock deadline rather than a decrementing counter, so it
  * cannot drift when the tab is throttled or the device sleeps.
  *
+ * `TimerRack` holds several of them at once, because cooking is parallel — the
+ * rice simmers while the chicken rests. See its comment below.
+ *
  * UMD bundle: works as a CommonJS module (Node tests / Alexa skill) and as
  * `window.CookalongTimer` in the Fire TV Web App.
  */
@@ -224,5 +227,178 @@
     }
   }
 
-  return { parseDuration, stepDurationSeconds, Timer };
+  /**
+   * A set of timers, because cooking is parallel.
+   *
+   * The rice simmers for 18 minutes while the chicken rests for 5 and the oven
+   * counts down from 20. A single timer forces the cook to choose which thing
+   * to forget, so the rack keeps them all: each one named, each one visible,
+   * each one finishing on its own schedule.
+   *
+   * Naming matters more than the count. "Timer done" is useless when three are
+   * running; "Chicken rest — done" tells you what to walk back to.
+   */
+  class TimerRack {
+    constructor(onChange = null, options = {}) {
+      this._entries = [];                       // { id, label, timer }
+      this._onChange = onChange;
+      this._seq = 0;
+      this.maxTimers = Number(options.maxTimers) > 0 ? Number(options.maxTimers) : 6;
+    }
+
+    get size() { return this._entries.length; }
+
+    list() { return this._entries.map(e => ({ id: e.id, label: e.label, timer: e.timer })); }
+
+    get(id) { return this._entries.find(e => e.id === id) || null; }
+
+    /** Everything the cook has not dismissed yet, soonest first. */
+    active() {
+      return this.list()
+        .filter(e => e.timer.state !== "done")
+        .sort((a, b) => a.timer.remainingSeconds - b.timer.remainingSeconds);
+    }
+
+    done() { return this.list().filter(e => e.timer.state === "done"); }
+
+    running() { return this.list().filter(e => e.timer.state === "running"); }
+
+    /**
+     * The one to mention when there is room for only one — the soonest deadline,
+     * so a glance at the home screen shows the most urgent pot.
+     */
+    next() { return this.active()[0] || null; }
+
+    findByLabel(label) {
+      const key = String(label || "").trim().toLowerCase();
+      if (!key) return null;
+      return this._entries.find(e => e.label.trim().toLowerCase() === key) || null;
+    }
+
+    /**
+     * Add a timer. Asking again for something already counting replaces it
+     * rather than stacking a duplicate: a cook who presses "Set timer" twice on
+     * one step wants one timer, restarted, not two racing each other.
+     *
+     * @returns {object|null} the entry, or null when the rack is full or the
+     *                        duration is nonsense
+     */
+    add(durationSeconds, label = "", id = null) {
+      if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) return null;
+
+      const duplicate = this.findByLabel(label);
+      if (duplicate) this.remove(duplicate.id);
+      else if (this._entries.filter(e => e.timer.state !== "done").length >= this.maxTimers) return null;
+
+      const timer = new Timer(durationSeconds, t => this._handleTick(t));
+      const entry = { id: id || `t${++this._seq}`, label: String(label || ""), timer };
+      this._entries.push(entry);
+      this._changed();
+      return entry;
+    }
+
+    remove(id) {
+      const entry = this.get(id);
+      if (!entry) return false;
+      entry.timer.stop();
+      this._entries = this._entries.filter(e => e !== entry);
+      this._changed();
+      return true;
+    }
+
+    /** Dismiss every finished timer — what "Dismiss" on the alert does. */
+    clearDone() {
+      const finished = this.done();
+      if (!finished.length) return 0;
+      this._entries = this._entries.filter(e => e.timer.state !== "done");
+      this._changed();
+      return finished.length;
+    }
+
+    clear() {
+      this._entries.forEach(e => e.timer.stop());
+      this._entries = [];
+      this._changed();
+    }
+
+    start(id) {
+      const entry = this.get(id);
+      if (!entry) return false;
+      entry.timer.start();
+      this._changed();
+      return true;
+    }
+
+    pause(id) {
+      const entry = this.get(id);
+      if (!entry) return false;
+      entry.timer.pause();
+      this._changed();
+      return true;
+    }
+
+    pauseAll() {
+      this._entries.forEach(e => { if (e.timer.state === "running") e.timer.pause(); });
+      this._changed();
+      return this;
+    }
+
+    restart(id) {
+      const entry = this.get(id);
+      if (!entry) return false;
+      entry.timer.pause();
+      entry.timer.remainingSeconds = entry.timer.totalSeconds;
+      this._changed();
+      return true;
+    }
+
+    _handleTick(timer) {
+      const entry = this._entries.find(e => e.timer === timer);
+      this._changed(timer.state === "done" ? entry : null);
+    }
+
+    _changed(finished = null) {
+      if (this._onChange) this._onChange(this, finished);
+    }
+
+    toJSON() {
+      return {
+        v: 2,
+        timers: this._entries.map(e => Object.assign({ id: e.id, label: e.label }, e.timer.toJSON())),
+      };
+    }
+
+    /**
+     * Restore a rack. Accepts the v1 single-timer snapshot too, so a timer
+     * already counting when this shipped is not silently thrown away.
+     */
+    static fromJSON(raw, onChange = null) {
+      let snapshot = raw;
+      if (typeof snapshot === "string") {
+        try { snapshot = JSON.parse(snapshot); } catch (e) { return null; }
+      }
+      if (!snapshot || typeof snapshot !== "object") return null;
+
+      const records = snapshot.v === 2
+        ? snapshot.timers
+        : (Number.isFinite(snapshot.totalSeconds) ? [snapshot] : null);
+      if (!Array.isArray(records) || !records.length) return null;
+
+      const rack = new TimerRack(onChange);
+      records.forEach(record => {
+        if (!record || !Number.isFinite(record.totalSeconds) || record.totalSeconds <= 0) return;
+        const timer = Timer.fromJSON(record, t => rack._handleTick(t));
+        if (!timer) return;
+        rack._seq += 1;
+        rack._entries.push({
+          id: record.id || `t${rack._seq}`,
+          label: String(record.label || ""),
+          timer,
+        });
+      });
+      return rack._entries.length ? rack : null;
+    }
+  }
+
+  return { parseDuration, stepDurationSeconds, Timer, TimerRack };
 });
