@@ -14,6 +14,12 @@
       <button id="btn-voice" class="mic" title="Try voice control (browser demo)">
         <span id="mic-icon">🎙</span><span id="mic-label">Voice</span>
       </button>
+      <button id="btn-timer-badge" class="mic timer-badge hidden" title="Timer running — open the cooking screen">
+        <span id="timer-badge-icon">⏱</span><span id="timer-badge-text">00:00</span>
+      </button>
+      <button id="btn-mute" class="mic" title="Mute or unmute spoken guidance" aria-pressed="false">
+        <span id="mute-icon">🔊</span><span id="mute-label">Voice on</span>
+      </button>
     </div>
   </header>
   <main id="view-home" class="view">
@@ -28,7 +34,8 @@
       <h3 class="kitchen-title">🧺 What's in my kitchen?</h3>
       <p class="kitchen-hint">Tell CookAlong what you have — it will find the best recipes, flag what's missing, and suggest swaps.</p>
       <div class="kitchen-input">
-        <input id="kitchen-input" type="text" placeholder="e.g. chicken, garlic, rice, 番茄, 鸡蛋" autocomplete="off" />
+        <input id="kitchen-input" type="text" list="ingredient-suggestions" placeholder="e.g. chicken, garlic, rice, 番茄, 鸡蛋" autocomplete="off" />
+        <datalist id="ingredient-suggestions"></datalist>
         <button id="btn-kitchen-find" class="btn primary">Find recipes</button>
       </div>
       <div id="kitchen-chips" class="kitchen-chips" aria-label="Quick ingredient chips"></div>
@@ -36,12 +43,14 @@
         <span class="pantry-label">🍱 Pantry:</span>
         <div id="pantry-chips" class="pantry-chips" aria-label="Saved pantry ingredients — tap one to mark it used"></div>
         <button id="btn-pantry-add" class="btn small pantry-add">＋ Save input to pantry</button>
+        <button id="btn-pantry-clear" class="btn small pantry-clear">Clear pantry</button>
       </div>
-      <div id="kitchen-results" class="kitchen-results"></div>
+      <div id="kitchen-results" class="kitchen-results" aria-live="polite"></div>
     </section>
     <aside id="voice-cheatsheet" class="cheatsheet">
-      <h4>🎙 Voice commands (demo)</h4>
+      <h4>🎙 Remote &amp; voice</h4>
       <ul>
+        <li><em>Remote</em> — arrow keys move, OK selects, Back returns</li>
         <li>"cook <em>tomato basil pasta</em>" — open a recipe</li>
         <li>"what can I cook with <em>chicken and garlic</em>" — smart match</li>
         <li>"next step" / "previous step"</li>
@@ -58,7 +67,7 @@
     <div id="progress" class="progress" aria-label="Step progress"></div>
     <section id="step-card" class="step-card">
       <div class="step-number" id="step-label">Step 1</div>
-      <p id="step-text" class="step-text"></p>
+      <p id="step-text" class="step-text" aria-live="polite" aria-atomic="true"></p>
     </section>
     <div class="controls">
       <button id="btn-prev" class="btn">◀ Previous</button>
@@ -66,8 +75,14 @@
       <button id="btn-speak" class="btn">🔊 Read step</button>
       <button id="btn-next" class="btn">Next ▶</button>
     </div>
+    <section id="swap-panel" class="swap-panel hidden" aria-label="Ingredient swaps">
+      <h4 class="swap-title">🔄 Missing something? Pick a swap — the steps rewrite themselves</h4>
+      <div id="swap-list" class="swap-list"></div>
+      <p id="swap-banner" class="swap-banner hidden"></p>
+    </section>
     <div id="timer-display" class="timer hidden">
-      <div id="timer-time" class="timer-time">05:00</div>
+      <div id="timer-time" class="timer-time" aria-live="off">05:00</div>
+      <div id="timer-state" class="timer-state">ready</div>
       <div class="timer-controls">
         <button id="btn-timer-start" class="btn small">Start</button>
         <button id="btn-timer-pause" class="btn small">Pause</button>
@@ -76,9 +91,18 @@
     </div>
   </main>
   <footer id="footer">CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</footer>
+  <div id="timer-alert" class="timer-alert hidden" role="alert">
+    <div class="timer-alert-box">
+      <div class="timer-alert-ring">⏰</div>
+      <h2 id="timer-alert-title">Timer done!</h2>
+      <p id="timer-alert-body">Time to check your food.</p>
+      <button id="btn-timer-dismiss" class="btn primary">Dismiss</button>
+    </div>
+  </div>
   <div id="toast" class="toast hidden"></div>
   <script src="recipes-data.js"></script>
   <script src="ingredients-engine.js"></script>
+  <script src="timer-engine.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
