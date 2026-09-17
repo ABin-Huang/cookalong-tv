@@ -3,7 +3,52 @@
 const { test } = require("node:test");
 const assert = require("node:assert");
 
-const { parseDuration, Timer } = require("../src/timer");
+const { parseDuration, stepDurationSeconds, Timer } = require("../src/timer");
+
+/* ------------------- stepDurationSeconds (recipe step text) ------------------ */
+
+test("stepDurationSeconds: finds the cooking time inside a step", () => {
+  assert.strictEqual(stepDurationSeconds("Boil salted water and cook 200g of spaghetti for 9 minutes."), 540);
+  assert.strictEqual(stepDurationSeconds("Return the chicken, cover and cook on low for 18 minutes."), 1080);
+  assert.strictEqual(stepDurationSeconds("Add 4 sliced garlic cloves and cook for 30 seconds until fragrant."), 30);
+});
+
+test("stepDurationSeconds: doubles a per-side instruction", () => {
+  assert.strictEqual(stepDurationSeconds("brown the chicken for 4 minutes per side."), 480);
+  assert.strictEqual(stepDurationSeconds("Dip the bread into the mixture for 10 seconds per side."), 20);
+});
+
+test("stepDurationSeconds: a range resolves to its upper bound", () => {
+  assert.strictEqual(stepDurationSeconds("Cook the bread for 2 to 3 minutes per side until golden."), 360);
+});
+
+test("stepDurationSeconds: several times in one step report the longest", () => {
+  const step = "cook the onion for 3 minutes, then add garlic and mushrooms for 4 minutes.";
+  assert.strictEqual(stepDurationSeconds(step), 240);
+});
+
+test("stepDurationSeconds: returns null when the step names no time", () => {
+  assert.strictEqual(stepDurationSeconds("Drain the pasta, reserving a cup of pasta water."), null);
+  assert.strictEqual(stepDurationSeconds("Pour in 600ml of chicken stock and bring to a simmer."), null);
+  assert.strictEqual(stepDurationSeconds("Slice 350g of beef into thin strips against the grain."), null);
+});
+
+test("stepDurationSeconds: quantities and ingredient names are not mistaken for times", () => {
+  // 300g of rice, 1 teaspoon of cumin, 2 tbsp of oil, 4 thick slices of bread
+  assert.strictEqual(stepDurationSeconds("Add 300g of rice and 1 teaspoon of cumin."), null);
+  assert.strictEqual(stepDurationSeconds("Heat 2 tablespoons of olive oil in a wide pan."), null);
+  assert.strictEqual(stepDurationSeconds("Dip 4 thick slices of bread into the mixture."), null);
+});
+
+test("stepDurationSeconds: spells out small numbers and ignores nonsense", () => {
+  assert.strictEqual(stepDurationSeconds("Let the batter rest for a minute."), 60);
+  assert.strictEqual(stepDurationSeconds(""), null);
+  assert.strictEqual(stepDurationSeconds(null), null);
+});
+
+test("stepDurationSeconds: clamps absurd values instead of returning them", () => {
+  assert.strictEqual(stepDurationSeconds("Marinate for 48 hours."), null);
+});
 
 test("parseDuration: simple minutes", () => {
   assert.strictEqual(parseDuration("5 minutes"), 300);

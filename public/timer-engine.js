@@ -21,7 +21,7 @@
   const UNIT_SECONDS = {
     second: 1, seconds: 1, sec: 1, secs: 1,
     minute: 60, minutes: 60, min: 60, mins: 60,
-    hour: 3600, hours: 3600
+    hour: 3600, hours: 3600, hr: 3600, hrs: 3600
   };
 
   const NUMBER_WORDS = {
@@ -74,6 +74,42 @@
     if (!matched && seconds === 0) return null;
     if (seconds === 0) return null;
     return seconds;
+  }
+
+  // "9 minutes", "2 to 3 minutes per side", "10 seconds", "1.5 hours"
+  const STEP_TIME_RE = /(\d+(?:\.\d+)?)\s*(?:to|or|–|-|~)?\s*(\d+(?:\.\d+)?)?\s*(hours?|hrs?|minutes?|mins?|seconds?|secs?)\b/gi;
+  const MIN_STEP_SECONDS = 5;
+  const MAX_STEP_SECONDS = 6 * 3600;
+
+  /**
+   * Pull the cooking time out of a recipe step ("simmer for 8 minutes"), so the
+   * UI can offer the timer the step is actually asking for. A step that names
+   * several times reports the longest one — that is the one worth a timer — and
+   * a "per side" instruction is doubled.
+   *
+   * @param {string} stepText
+   * @returns {number|null} seconds, or null when the step names no duration
+   */
+  function stepDurationSeconds(stepText) {
+    if (!stepText) return null;
+    const text = String(stepText);
+    let best = null;
+    let m;
+    STEP_TIME_RE.lastIndex = 0;
+    while ((m = STEP_TIME_RE.exec(text)) !== null) {
+      const unit = UNIT_SECONDS[m[3].toLowerCase()];
+      if (unit === undefined) continue;
+      const value = parseFloat(m[2] || m[1]);
+      let seconds = Math.round(value * unit);
+      if (/^\s*per\s+side/i.test(text.slice(m.index + m[0].length))) seconds *= 2;
+      if (seconds >= MIN_STEP_SECONDS && seconds <= MAX_STEP_SECONDS && (best === null || seconds > best)) {
+        best = seconds;
+      }
+    }
+    if (best !== null) return best;
+    // steps that spell the time out ("let the batter rest for a minute")
+    const parsed = parseDuration(text);
+    return parsed !== null && parsed >= MIN_STEP_SECONDS && parsed <= MAX_STEP_SECONDS ? parsed : null;
   }
 
   class Timer {
@@ -188,5 +224,5 @@
     }
   }
 
-  return { parseDuration, Timer };
+  return { parseDuration, stepDurationSeconds, Timer };
 });
