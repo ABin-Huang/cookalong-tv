@@ -17,6 +17,7 @@
   let voiceListening = false;
   let voiceMuted = false;
   let currentMatch = null;      // the kitchen match a recipe was opened from, if any
+  let currentHave = null;       // the ingredient set that match was scored against
   let activeSwaps = {};         // canonical -> substitution option currently applied
 
   const MUTE_KEY = "cookalong.muted.v1";
@@ -50,11 +51,12 @@
     filtered.forEach(r => grid.appendChild(cardFor(r)));
   }
 
-  function openRecipe(id, match) {
+  function openRecipe(id, match, have) {
     currentRecipe = recipes.find(r => r.id === id) || null;
     if (!currentRecipe) return;
     currentStep = 0;
     currentMatch = match || null;
+    currentHave = have ? new Set(have) : null;
     activeSwaps = {};
     hideTimer();   // a timer already counting keeps running across recipes
     viewHome.classList.add("hidden");
@@ -63,11 +65,78 @@
     const n = currentRecipe.nutrition;
     $("recipe-meta").textContent = `${currentRecipe.prepTimeMinutes} min · serves ${currentRecipe.serves}` +
       (n ? ` · 🔥 ${n.kcal} kcal · P ${n.protein}g / C ${n.carbs}g / F ${n.fat}g per serving` : "");
-    renderStep(); renderProgress(); renderSwaps(); renderTimer();
+    renderStep(); renderProgress(); renderSwaps(); renderIngredients(); renderTimer();
     window.scrollTo(0, 0);
     returnFocusId = id;
     focusEl(defaultFocus());
     speak(`Starting ${currentRecipe.name}. ${displaySteps()[0]}`, true);
+  }
+
+  /* ---------------- "What you need": the ingredient list ---------------- */
+
+  /**
+   * Tag one ingredient with what the engine already knows about it. Opened from
+   * the kitchen panel the tags come from that match; opened from the recipe grid
+   * they come from the pantry alone, so we never claim something is "missing"
+   * when we simply do not know.
+   */
+  function ingredientStatus(ing) {
+    if (ing.pantry) return { kind: "staple", label: "🍱 pantry staple" };
+    if (activeSwaps[ing.canonical]) return { kind: "swapped", label: `🔄 → ${activeSwaps[ing.canonical].name}` };
+    if (currentHave && currentHave.has(ing.canonical)) return { kind: "have", label: "✓ on hand" };
+    if (!currentHave && pantry && pantry.has(ing.canonical)) return { kind: "have", label: "✓ in pantry" };
+    if (currentMatch) {
+      if (currentMatch.missingSubstitutable.includes(ing.canonical)) return { kind: "swap", label: "🔄 swap available" };
+      if (currentMatch.missingHard.includes(ing.canonical)) return { kind: "miss", label: "✗ missing" };
+    }
+    return { kind: "plain", label: "" };
+  }
+
+  function renderIngredients() {
+    const list = $("ingredients-list");
+    if (!list) return;
+    const summary = $("ingredients-summary");
+    if (!currentRecipe) { list.innerHTML = ""; if (summary) summary.textContent = ""; return; }
+
+    const ings = currentRecipe.ingredients || [];
+    list.innerHTML = "";
+    let ready = 0;
+    let swapped = 0;
+    let swap = 0;
+    let miss = 0;
+
+    ings.forEach(ing => {
+      const st = ingredientStatus(ing);
+      if (st.kind === "have" || st.kind === "staple") ready += 1;
+      else if (st.kind === "swapped") swapped += 1;
+      else if (st.kind === "swap") swap += 1;
+      else if (st.kind === "miss") miss += 1;
+
+      const row = document.createElement("li");
+      row.className = `ing-row ${st.kind}`;
+      const qty = document.createElement("span");
+      qty.className = "ing-qty";
+      qty.textContent = ing.qty || "";
+      const name = document.createElement("span");
+      name.className = "ing-name";
+      name.textContent = ing.name;
+      row.append(qty, name);
+      if (st.label) {
+        const tag = document.createElement("span");
+        tag.className = "ing-tag";
+        tag.textContent = st.label;
+        row.appendChild(tag);
+      }
+      list.appendChild(row);
+    });
+
+    if (summary) {
+      const bits = [`${ready} of ${ings.length} ready`];
+      if (swapped) bits.push(`${swapped} swapped`);
+      if (swap) bits.push(`${swap} swappable`);
+      if (miss) bits.push(`${miss} to buy`);
+      summary.textContent = `${currentRecipe.serves} serving${currentRecipe.serves === 1 ? "" : "s"} · ${bits.join(" · ")}`;
+    }
   }
 
   /** Recipe step text with any applied swaps rewritten in. */
@@ -94,27 +163,64 @@
     $("step-text").textContent = steps[currentStep];
     $("btn-prev").disabled = currentStep === 0;
     $("btn-next").disabled = currentStep === total - 1;
-    updateTimerButton(); renderProgress();
+    updateTimerButton(); renderProgress(); renderStepTimerHint();
     showToast(`${currentRecipe.name} — Step ${currentStep + 1}`);
   }
 
   function renderProgress() {
     const box = $("progress");
     if (!currentRecipe) { box.innerHTML = ""; return; }
-    box.innerHTML = currentRecipe.steps.map((_, i) => `<span class="dot ${i <= currentStep ? "done" : ""}"></span>`).join("");
+    const total = displaySteps().length;
+    box.innerHTML = Array.from({ length: total }, (_, i) => `<span class="dot ${i <= currentStep ? "done" : ""}"></span>`).join("");
   }
 
   function defaultTimerSeconds() {
     const min = (currentRecipe && currentRecipe.prepTimeMinutes) || 5;
     return Math.max(60, Math.min(30 * 60, min * 60));
   }
+
+  /**
+   * The time the current step itself is asking for ("simmer for 18 minutes").
+   * This is what lets the timer follow the recipe instead of a fixed default.
+   */
+  function stepSeconds() {
+    if (!currentRecipe || !T || !T.stepDurationSeconds) return null;
+    const steps = displaySteps();
+    return T.stepDurationSeconds(steps[currentStep] || "");
+  }
+
+  /** What the ⏱ button should offer: the step's own time, else the recipe's. */
+  function suggestedTimerSeconds() {
+    return stepSeconds() || defaultTimerSeconds();
+  }
+
+  function humanDuration(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    const parts = [];
+    if (m) parts.push(`${m} minute${m === 1 ? "" : "s"}`);
+    if (s) parts.push(`${s} second${s === 1 ? "" : "s"}`);
+    return parts.join(" ") || "0 seconds";
+  }
+
   function fmt(seconds) {
     return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
   }
   function updateTimerButton() {
     const btn = $("btn-timer");
     if (!currentRecipe) return;
-    btn.textContent = `⏱ Set timer ${fmt(defaultTimerSeconds())}`;
+    btn.textContent = `⏱ Set timer ${fmt(suggestedTimerSeconds())}`;
+    btn.title = stepSeconds() ? "This step's own cooking time" : "A default timer for this recipe";
+  }
+
+  /** Surface the step's own time so the cook never has to scan the sentence. */
+  function renderStepTimerHint() {
+    const hint = $("step-timer-hint");
+    if (!hint) return;
+    const secs = stepSeconds();
+    if (!secs) { hint.classList.add("hidden"); hint.textContent = ""; return; }
+    hint.textContent = `⏱ This step takes about ${humanDuration(secs)} — press “Set timer”.`;
+    hint.classList.remove("hidden");
   }
   function showTimer() { $("timer-display").classList.remove("hidden"); }
   function hideTimer() { $("timer-display").classList.add("hidden"); }
@@ -136,7 +242,7 @@
     const time = $("timer-time");
     const state = $("timer-state");
     const badge = $("btn-timer-badge");
-    const secs = timer ? timer.remainingSeconds : defaultTimerSeconds();
+    const secs = timer ? timer.remainingSeconds : suggestedTimerSeconds();
     time.textContent = fmt(secs);
     if (state) state.textContent = timer ? (TIMER_LABELS[timer.state] || timer.state) : "ready";
 
@@ -166,11 +272,6 @@
     saveTimer();
   }
 
-  function ensureTimer() {
-    if (!timer) timer = new T.Timer(defaultTimerSeconds(), onTimerTick);
-    return timer;
-  }
-
   /**
    * Rebuild the timer at a given remaining time. `state` lets a restored
    * timer come back visibly paused instead of looking untouched.
@@ -186,7 +287,7 @@
 
   function startTimer() {
     if (!T) { showToast("Timer engine not loaded.", 3000); return; }
-    if (!timer || timer.state === "done") timer = new T.Timer(defaultTimerSeconds(), onTimerTick);
+    if (!timer || timer.state === "done") timer = new T.Timer(suggestedTimerSeconds(), onTimerTick);
     showTimer();
     timer.start();
     renderTimer();
@@ -204,7 +305,7 @@
 
   function resetTimer() {
     if (timer) timer.stop();
-    timer = new T.Timer(defaultTimerSeconds(), onTimerTick);
+    timer = new T.Timer(suggestedTimerSeconds(), onTimerTick);
     renderTimer();
     saveTimer();
   }
@@ -337,9 +438,9 @@
     if (t.includes("timer")) {
       if (t.includes("set")) {
         $("btn-timer").click();
-        const secs = defaultTimerSeconds();
+        const secs = suggestedTimerSeconds();
         setVoiceStatus(`Timer set for ${fmt(secs)}`);
-        speak(`Timer set for ${Math.round(secs / 60)} minutes`);
+        speak(`Timer set for ${humanDuration(secs)}`);
         return;
       }
       if (t.includes("start")) { startTimer(); setVoiceStatus("Timer started"); return; }
@@ -476,7 +577,7 @@
       return;
     }
     kitchenResults.innerHTML = "";
-    matches.forEach(m => kitchenResults.appendChild(kitchenMatchCard(m, profile)));
+    matches.forEach(m => kitchenResults.appendChild(kitchenMatchCard(m, profile, have)));
     speak(`I found ${matches.length} recipes you can make.`);
     setVoiceStatus(`Found ${matches.length} matches for your kitchen`);
     showToast(`🧺 ${matches.length} recipe${matches.length > 1 ? "s" : ""} matched`, 3000);
@@ -531,7 +632,7 @@
     return { onHand, swap, miss, total, onHandPts, swapPts, earned: onHandPts + swapPts };
   }
 
-  function kitchenMatchCard(m, profile) {
+  function kitchenMatchCard(m, profile, haveSet) {
     const r = m.recipe;
     const card = document.createElement("article");
     card.className = "match-card";
@@ -577,8 +678,8 @@
       toggle.textContent = open ? `Why ${m.score}%?` : "Hide breakdown";
     });
 
-    card.querySelector(".match-cook").addEventListener("click", () => openRecipe(r.id, m));
-    card.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") openRecipe(r.id, m); });
+    card.querySelector(".match-cook").addEventListener("click", () => openRecipe(r.id, m, haveSet));
+    card.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") openRecipe(r.id, m, haveSet); });
     return card;
   }
 
@@ -686,7 +787,7 @@
   function applySwap(canonical, option) {
     if (!currentRecipe) return;
     activeSwaps[canonical] = option;
-    renderStep(); renderSwaps();
+    renderStep(); renderSwaps(); renderIngredients();
     const label = ingredientLabel(currentRecipe, canonical);
     showToast(`🔄 ${label} → ${option.name}`, 4000);
     setVoiceStatus(`Swapped ${label} for ${option.name}`);
@@ -696,7 +797,7 @@
   function undoSwap(canonical) {
     if (!currentRecipe) return;
     delete activeSwaps[canonical];
-    renderStep(); renderSwaps();
+    renderStep(); renderSwaps(); renderIngredients();
     showToast("↩ Swap undone — original step text restored", 3000);
     setVoiceStatus("Swap undone");
   }
@@ -780,7 +881,7 @@
   $("btn-back").addEventListener("click", () => {
     // a running timer keeps counting: you set it so you could walk away
     hideTimer();
-    currentRecipe = null; currentMatch = null; activeSwaps = {};
+    currentRecipe = null; currentMatch = null; currentHave = null; activeSwaps = {};
     viewRecipe.classList.add("hidden");
     viewHome.classList.remove("hidden");
     renderSwaps();
@@ -790,7 +891,7 @@
   $("btn-next").addEventListener("click", () => { if (currentStep < displaySteps().length - 1) { currentStep += 1; renderStep(); } });
   $("btn-timer").addEventListener("click", () => {
     // don't clobber a timer that is already counting
-    if (!timer || timer.state === "done") setTimerSeconds(defaultTimerSeconds());
+    if (!timer || timer.state === "done") setTimerSeconds(suggestedTimerSeconds());
     showTimer();
     renderTimer();
     focusEl($("btn-timer-start").disabled ? $("btn-timer-pause") : $("btn-timer-start"));
@@ -800,10 +901,14 @@
   $("btn-timer-reset").addEventListener("click", resetTimer);
   $("btn-timer-dismiss").addEventListener("click", dismissTimerAlert);
   $("btn-timer-badge").addEventListener("click", () => {
-    if (currentRecipe) { viewHome.classList.add("hidden"); viewRecipe.classList.remove("hidden"); }
+    // The timer panel is global state rather than part of a view, so this works
+    // from the home screen too — you set the timer so you could walk away.
+    if (!timer) return;
     showTimer();
+    renderTimer();
+    const target = $("btn-timer-start").disabled ? $("btn-timer-pause") : $("btn-timer-start");
+    focusEl(target);
     $("timer-display").scrollIntoView({ block: "center", behavior: "smooth" });
-    focusEl($("btn-timer-start"));
   });
   $("btn-speak").addEventListener("click", () => { if (currentRecipe) speak(displaySteps()[currentStep]); });
   $("btn-voice").addEventListener("click", toggleVoice);

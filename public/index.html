@@ -64,10 +64,18 @@
     <button id="btn-back" class="btn-back">← All recipes</button>
     <h2 id="recipe-title"></h2>
     <p id="recipe-meta" class="meta"></p>
+    <section id="ingredients-panel" class="ingredients-panel" aria-label="What you need">
+      <div class="ingredients-head">
+        <h4 class="ingredients-title">🧺 What you need</h4>
+        <span id="ingredients-summary" class="ingredients-summary" aria-live="polite"></span>
+      </div>
+      <ul id="ingredients-list" class="ingredients-list"></ul>
+    </section>
     <div id="progress" class="progress" aria-label="Step progress"></div>
     <section id="step-card" class="step-card">
       <div class="step-number" id="step-label">Step 1</div>
       <p id="step-text" class="step-text" aria-live="polite" aria-atomic="true"></p>
+      <p id="step-timer-hint" class="step-timer-hint hidden"></p>
     </section>
     <div class="controls">
       <button id="btn-prev" class="btn">◀ Previous</button>
@@ -80,18 +88,20 @@
       <div id="swap-list" class="swap-list"></div>
       <p id="swap-banner" class="swap-banner hidden"></p>
     </section>
-    <div id="timer-display" class="timer hidden">
-      <div id="timer-time" class="timer-time" aria-live="off">05:00</div>
-      <div id="timer-state" class="timer-state">ready</div>
-      <div class="timer-controls">
-        <button id="btn-timer-start" class="btn small">Start</button>
-        <button id="btn-timer-pause" class="btn small">Pause</button>
-        <button id="btn-timer-reset" class="btn small">Reset</button>
-      </div>
-    </div>
   </main>
+  <!-- The timer is global state, not owned by a view: you set it so you could
+       walk away, so its controls must be reachable from any screen. -->
+  <section id="timer-display" class="timer hidden" aria-label="Timer">
+    <div id="timer-time" class="timer-time" aria-live="off">05:00</div>
+    <div id="timer-state" class="timer-state">ready</div>
+    <div class="timer-controls">
+      <button id="btn-timer-start" class="btn small">Start</button>
+      <button id="btn-timer-pause" class="btn small">Pause</button>
+      <button id="btn-timer-reset" class="btn small">Reset</button>
+    </div>
+  </section>
   <footer id="footer">CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</footer>
-  <div id="timer-alert" class="timer-alert hidden" role="alert">
+  <div id="timer-alert" class="timer-alert hidden" role="alertdialog" aria-modal="true" aria-labelledby="timer-alert-title" aria-describedby="timer-alert-body">
     <div class="timer-alert-box">
       <div class="timer-alert-ring">⏰</div>
       <h2 id="timer-alert-title">Timer done!</h2>
@@ -99,7 +109,7 @@
       <button id="btn-timer-dismiss" class="btn primary">Dismiss</button>
     </div>
   </div>
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite" aria-atomic="true"></div>
   <script src="recipes-data.js"></script>
   <script src="ingredients-engine.js"></script>
   <script src="timer-engine.js"></script>

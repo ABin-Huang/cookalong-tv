@@ -104,7 +104,23 @@ body {
 .match-why-row .w { color: var(--text); font-variant-numeric: tabular-nums; }
 .match-why-foot { font-size: 15px; color: var(--muted); margin-top: 4px; font-style: italic; }
 
+/* ---- "What you need": the ingredient list ---- */
+.ingredients-panel { background: var(--panel); border: 2px solid #2a333d; border-radius: 16px; padding: 22px 30px; margin-bottom: 26px; max-width: 1100px; }
+.ingredients-head { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.ingredients-title { font-size: 22px; color: var(--accent-2); }
+.ingredients-summary { color: var(--muted); font-size: 17px; }
+.ingredients-list { list-style: none; display: grid; grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 2px 26px; }
+.ing-row { display: flex; align-items: baseline; gap: 10px; font-size: 19px; padding: 6px 0; border-bottom: 1px solid #232c35; }
+.ing-qty { color: var(--accent-2); font-size: 17px; min-width: 96px; font-variant-numeric: tabular-nums; }
+.ing-name { flex: 1; }
+.ing-tag { font-size: 15px; white-space: nowrap; color: var(--muted); }
+.ing-row.have .ing-name, .ing-row.staple .ing-name { color: var(--muted); }
+.ing-row.have .ing-tag { color: var(--ok); }
+.ing-row.swap .ing-tag, .ing-row.swapped .ing-tag { color: var(--accent-2); }
+.ing-row.miss .ing-tag { color: #e56b6f; }
+
 /* ---- Timer state + done alert ---- */
+#timer-display { margin: 0 48px 34px; }
 .timer-state { color: var(--muted); font-size: 17px; margin-top: 4px; text-transform: capitalize; }
 .timer-alert { position: fixed; inset: 0; z-index: 200; display: flex; align-items: center; justify-content: center; background: rgba(6, 8, 11, .82); }
 .timer-alert-box { background: var(--panel); border: 3px solid var(--accent-2); border-radius: 22px; padding: 44px 56px; text-align: center; max-width: 620px; }
@@ -126,6 +142,7 @@ body {
 .step-card { background: var(--panel); border-left: 8px solid var(--accent); border-radius: 16px; padding: 34px 40px; margin-bottom: 30px; min-height: 220px; display: flex; flex-direction: column; justify-content: center; }
 .step-number { color: var(--accent-2); font-size: 22px; font-weight: 700; margin-bottom: 14px; }
 .step-text { font-size: 32px; line-height: 1.5; }
+.step-timer-hint { margin-top: 16px; font-size: 20px; color: var(--accent-2); }
 .controls { display: flex; gap: 20px; flex-wrap: wrap; margin-bottom: 26px; }
 .btn { background: var(--panel-2); color: var(--text); border: 2px solid #33404d; border-radius: 14px; padding: 16px 30px; font-size: 22px; cursor: pointer; transition: all .12s ease; }
 .btn:hover:not(:disabled), .btn:focus-visible { border-color: var(--accent); }
@@ -142,4 +159,6 @@ body {
   .step-text { font-size: 26px; }
   #topbar { flex-direction: column; gap: 10px; text-align: center; }
   .view { padding: 20px; }
+  #timer-display { margin: 0 20px 24px; }
+  .ingredients-list { grid-template-columns: 1fr; }
 }
