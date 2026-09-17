@@ -4,9 +4,11 @@
  * Sync the shared engines from src/ into public/ so the Fire TV Web App can
  * never drift away from the Node side (skill + tests).
  *
- *   src/ingredients.js -> public/ingredients-engine.js   (verbatim; it is UMD)
- *   src/timer.js       -> public/timer-engine.js         (verbatim; it is UMD)
- *   src/recipes.js     -> public/recipes-data.js         (window.COOKALONG_RECIPES)
+ *   src/ingredients.js  -> public/ingredients-engine.js    (verbatim; it is UMD)
+ *   src/timer.js        -> public/timer-engine.js          (verbatim; it is UMD)
+ *   src/capabilities.js -> public/capabilities-engine.js   (verbatim; it is UMD)
+ *   src/progress.js     -> public/progress-engine.js       (verbatim; it is UMD)
+ *   src/recipes.js      -> public/recipes-data.js          (window.COOKALONG_RECIPES)
  *
  * Usage:
  *   node scripts/build-web.js           write the artifacts
@@ -31,6 +33,8 @@ const { RECIPES } = require(path.join(ROOT, "src", "recipes.js"));
 const artifacts = [
   { out: "public/ingredients-engine.js", content: read("src/ingredients.js") },
   { out: "public/timer-engine.js", content: read("src/timer.js") },
+  { out: "public/capabilities-engine.js", content: read("src/capabilities.js") },
+  { out: "public/progress-engine.js", content: read("src/progress.js") },
   {
     out: "public/recipes-data.js",
     content: "// AUTO-SYNCED from src/recipes.js — do not edit by hand.\n" +
