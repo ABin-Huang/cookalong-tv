@@ -13,7 +13,8 @@
   let activeDiet = "any";
   let currentRecipe = null;
   let currentStep = 0;
-  let timer = null;
+  let rack = null;                  // the set of timers; cooking is parallel
+  let finishedTimers = [];          // labels that finished and are unacknowledged
   let voiceListening = false;
   let voiceMuted = false;
   let currentMatch = null;      // the kitchen match a recipe was opened from, if any
@@ -96,14 +97,14 @@
 
     if (!restore) clearProgress();   // starting fresh, so the old position is gone
 
-    hideTimer();   // a timer already counting keeps running across recipes
+    hideTimers();   // timers already counting keep running across recipes
     viewHome.classList.add("hidden");
     viewRecipe.classList.remove("hidden");
     $("recipe-title").textContent = currentRecipe.name;
     renderRecipeMeta();
     renderServings();
     renderStep(); renderProgress(); renderSwaps(); renderIngredients();
-    renderRecipeAllergens(); renderTimer();
+    renderRecipeAllergens(); renderTimers();
     window.scrollTo(0, 0);
     returnFocusId = id;
     focusEl(defaultFocus());
@@ -260,8 +261,11 @@
     const total = recipe.steps.length;
     const step = Math.min(saved.step, total - 1);
     const swaps = Object.keys(saved.swaps || {}).length;
-    const timerBit = timer && timer.remainingSeconds > 0 && timer.state !== "done"
-      ? ` The timer is still on it — ${fmt(timer.remainingSeconds)} ${timer.state === "paused" ? "paused" : "running"}.`
+    const soonest = rack ? rack.next() : null;
+    const timerBit = soonest
+      ? ` ${rack.active().length > 1 ? `${rack.active().length} timers are` : "The timer is"} still on it — ` +
+        `${fmt(soonest.timer.remainingSeconds)} ${soonest.timer.state === "paused" ? "paused" : "running"}` +
+        `${soonest.label ? ` (${soonest.label})` : ""}.`
       : "";
 
     $("resume-detail").textContent =
@@ -555,8 +559,12 @@
   function updateTimerButton() {
     const btn = $("btn-timer");
     if (!currentRecipe) return;
-    btn.textContent = `⏱ Set timer ${fmt(suggestedTimerSeconds())}`;
-    btn.title = stepSeconds() ? "This step's own cooking time" : "A default timer for this recipe";
+    const label = stepTimerLabel();
+    const already = (rack && label) ? rack.findByLabel(label) : null;
+    btn.textContent = `⏱ ${already ? "Restart" : "Set"} timer ${fmt(suggestedTimerSeconds())}`;
+    btn.title = already
+      ? "A timer is already on this step — pressing again restarts it"
+      : stepSeconds() ? "This step's own cooking time" : "A default timer for this recipe";
   }
 
   /** Surface the step's own time so the cook never has to scan the sentence. */
@@ -568,126 +576,256 @@
     hint.textContent = `⏱ This step takes about ${humanDuration(secs)} — press “Set timer”.`;
     hint.classList.remove("hidden");
   }
-  function showTimer() { $("timer-display").classList.remove("hidden"); }
-  function hideTimer() { $("timer-display").classList.add("hidden"); }
+  function showTimers() { $("timer-display").classList.remove("hidden"); renderTimers(); }
+  function hideTimers() { $("timer-display").classList.add("hidden"); }
 
-  /* ---- Timer: deadline-based engine + persistence + audible alarm ---- */
+  /* ---- Timers: a rack of deadline-based timers, reachable from any screen -- */
   const T = window.CookalongTimer || null;
   const TIMER_KEY = "cookalong.timer.v1";
 
-  function saveTimer() {
+  function ensureRack() {
+    if (!rack && T) rack = new T.TimerRack(onRackChange);
+    return rack;
+  }
+
+  function saveTimers() {
     try {
-      if (!timer) localStorage.removeItem(TIMER_KEY);
-      else localStorage.setItem(TIMER_KEY, JSON.stringify(timer.toJSON()));
+      if (!rack || !rack.size) localStorage.removeItem(TIMER_KEY);
+      else localStorage.setItem(TIMER_KEY, JSON.stringify(rack.toJSON()));
     } catch (e) { /* private mode */ }
   }
 
-  const TIMER_LABELS = { idle: "ready", running: "counting down", paused: "paused", done: "done" };
-
-  function renderTimer() {
-    const time = $("timer-time");
-    const state = $("timer-state");
-    const badge = $("btn-timer-badge");
-    const secs = timer ? timer.remainingSeconds : suggestedTimerSeconds();
-    time.textContent = fmt(secs);
-    if (state) state.textContent = timer ? (TIMER_LABELS[timer.state] || timer.state) : "ready";
-
-    $("btn-timer-start").disabled = !!timer && timer.state === "running";
-    $("btn-timer-pause").disabled = !timer || timer.state !== "running";
-
-    const pending = timer && timer.remainingSeconds > 0 &&
-      (timer.state === "running" || timer.state === "paused");
-    badge.classList.toggle("hidden", !pending);
-    if (pending) {
-      $("timer-badge-icon").textContent = timer.state === "running" ? "⏱" : "⏸";
-      $("timer-badge-text").textContent = fmt(timer.remainingSeconds);
-    }
+  /**
+   * What a timer is timing. "Timer done" is useless when three are running, so
+   * every timer carries the dish and the step it belongs to.
+   */
+  function stepTimerLabel() {
+    if (!currentRecipe) return "";
+    return `${currentRecipe.name} · step ${currentStep + 1}`;
   }
 
-  function onTimerTick(t) {
-    if (t.state === "done") {
-      localStorage.removeItem(TIMER_KEY);
-      renderTimer();
-      renderResume();   // the banner mentions the timer, so it is now out of date
-      playChime();
-      speak("Timer done! Time to check your food.");
-      showToast("⏰ Timer done! Time to check your food.", 6000);
-      showTimerAlert("Timer done!", "Time to check your food.");
-      return;
-    }
-    renderTimer();
-    saveTimer();
+  const TIMER_LABELS = { idle: "ready to start", running: "counting down", paused: "paused", done: "done" };
+
+  /** The topbar badge always shows the most urgent timer, so one glance is enough. */
+  function renderTimerBadge() {
+    const badge = $("btn-timer-badge");
+    if (!badge) return;
+    const live = rack ? rack.active() : [];
+    const soonest = live[0] || null;
+    badge.classList.toggle("hidden", !soonest);
+    if (!soonest) return;
+    $("timer-badge-icon").textContent = soonest.timer.state === "running" ? "⏱" : "⏸";
+    $("timer-badge-text").textContent = live.length > 1
+      ? `${fmt(soonest.timer.remainingSeconds)} +${live.length - 1}`
+      : fmt(soonest.timer.remainingSeconds);
+    badge.title = live.length > 1
+      ? `${live.length} timers — next is ${soonest.label || "a timer"}`
+      : `${soonest.label || "Timer"} — open the timers`;
   }
 
   /**
-   * Rebuild the timer at a given remaining time. `state` lets a restored
-   * timer come back visibly paused instead of looking untouched.
+   * Keep one row's buttons in step with its timer without replacing them.
+   * Rebuilding a focused button drops the remote's focus, and these rows are
+   * redrawn every second while a timer counts.
    */
-  function setTimerSeconds(seconds, state = "idle") {
-    if (!T) return;
-    if (timer) timer.stop();
-    timer = new T.Timer(seconds, onTimerTick);
-    if (state === "paused") timer.state = "paused";
-    renderTimer();
-    saveTimer();
-  }
+  function renderTimerRowActions(box, entry) {
+    const { timer } = entry;
+    const label = entry.label || "timer";
 
-  function startTimer() {
-    if (!T) { showToast("Timer engine not loaded.", 3000); return; }
-    if (!timer || timer.state === "done") timer = new T.Timer(suggestedTimerSeconds(), onTimerTick);
-    showTimer();
-    timer.start();
-    renderTimer();
-    saveTimer();
-  }
-
-  function pauseTimer() {
-    if (timer && timer.state === "running") { timer.pause(); handleTimerAfterPause(); }
-  }
-
-  function handleTimerAfterPause() {
-    renderTimer();
-    saveTimer();
-  }
-
-  function resetTimer() {
-    if (timer) timer.stop();
-    timer = new T.Timer(suggestedTimerSeconds(), onTimerTick);
-    renderTimer();
-    saveTimer();
-  }
-
-  function restoreTimer() {
-    if (!T) return;
-    let snapshot = null;
-    try { snapshot = JSON.parse(localStorage.getItem(TIMER_KEY) || "null"); } catch (e) { snapshot = null; }
-    if (!snapshot) { renderTimer(); return; }
-
-    const restored = T.Timer.fromJSON(snapshot, onTimerTick);
-    if (!restored) { localStorage.removeItem(TIMER_KEY); renderTimer(); return; }
-
-    if (restored.state === "done") {
-      localStorage.removeItem(TIMER_KEY);
-      timer = null;
-      renderTimer();
-      showToast("⏰ Your timer finished while you were away.", 6000);
-      showTimerAlert("Timer finished", "This one ran out while you were away.");
-      return;
+    let toggle = box.querySelector("button[data-action='toggle']");
+    if (timer.state !== "done" && !toggle) {
+      toggle = document.createElement("button");
+      toggle.className = "btn small";
+      toggle.dataset.action = "toggle";
+      box.insertBefore(toggle, box.firstChild);
+    } else if (timer.state === "done" && toggle) {
+      toggle.remove();
+      toggle = null;
+    }
+    if (toggle) {
+      const text = timer.state === "running" ? "Pause" : "Start";
+      if (toggle.textContent !== text) toggle.textContent = text;
+      toggle.setAttribute("aria-label", `${text} the ${label} timer`);
     }
 
-    setTimerSeconds(restored.remainingSeconds, "paused");
-    showToast(`⏱ Timer restored — ${fmt(restored.remainingSeconds)} left. Press Start to resume.`, 5000);
+    let remove = box.querySelector("button[data-action='remove']");
+    if (!remove) {
+      remove = document.createElement("button");
+      remove.className = "btn small";
+      remove.dataset.action = "remove";
+      box.appendChild(remove);
+    }
+    const removeText = timer.state === "done" ? "Dismiss" : "✕";
+    if (remove.textContent !== removeText) remove.textContent = removeText;
+    remove.setAttribute("aria-label", `Remove the ${label} timer`);
   }
 
-  function showTimerAlert(title, body) {
-    $("timer-alert-title").textContent = title;
-    $("timer-alert-body").textContent = body;
-    $("timer-alert").classList.remove("hidden");
+  function renderTimers() {
+    const list = $("timer-list");
+    if (!list) return;
+    const entries = rack ? rack.list() : [];
+    const count = $("timer-count");
+    if (count) count.textContent = String(entries.filter(e => e.timer.state !== "done").length);
+    const empty = $("timer-empty");
+    if (empty) empty.classList.toggle("hidden", entries.length > 0);
+
+    // Reconcile rather than rebuild: this runs on every tick, and throwing the
+    // list away each second would take the cook's focus with it.
+    const stale = new Map(
+      [...list.querySelectorAll("[data-timer-id]")].map(row => [row.dataset.timerId, row])
+    );
+
+    entries.forEach(entry => {
+      const { timer } = entry;
+      let row = stale.get(entry.id);
+      if (!row) {
+        row = document.createElement("li");
+        row.dataset.timerId = entry.id;
+        row.innerHTML =
+          '<span class="timer-row-label"></span><span class="timer-row-time"></span>' +
+          '<span class="timer-row-state"></span><span class="timer-row-actions"></span>';
+        list.appendChild(row);
+      }
+      stale.delete(entry.id);
+
+      row.className = `timer-row ${timer.state}`;
+      row.querySelector(".timer-row-label").textContent = entry.label || "Timer";
+      row.querySelector(".timer-row-time").textContent = fmt(timer.remainingSeconds);
+      row.querySelector(".timer-row-state").textContent = TIMER_LABELS[timer.state] || timer.state;
+      renderTimerRowActions(row.querySelector(".timer-row-actions"), entry);
+    });
+
+    stale.forEach(row => row.remove());
+
+    renderTimerBadge();
+    updateTimerButton();
+  }
+
+  /**
+   * Every timer reports through here — one place that redraws the list, writes
+   * the snapshot and, when one actually lands, says which one it was.
+   */
+  function onRackChange(rackRef, finished) {
+    renderTimers();
+    saveTimers();
+    renderResume();          // the banner quotes the timers, so it is now stale
+    if (finished) announceFinished(finished);
+  }
+
+  /**
+   * Announce a finished timer by name. Three timers running makes "Timer done"
+   * useless, so the alert says which pot to walk back to — and a second timer
+   * landing while the alert is still up adds itself rather than replacing what
+   * the cook has not read yet.
+   */
+  function announceFinished(entry) {
+    const label = (entry && entry.label) || "Timer";
+    if (!finishedTimers.includes(label)) finishedTimers.push(label);
+    playChime();
+    speak(`${label} — timer done!`);
+    showToast(`⏰ ${label} — time to check your food.`, 6000);
+    renderTimerAlert();
+  }
+
+  function renderTimerAlert() {
+    const box = $("timer-alert");
+    if (!box || !finishedTimers.length) return;
+    const many = finishedTimers.length > 1;
+    $("timer-alert-title").textContent = many ? `${finishedTimers.length} timers done!` : "Timer done!";
+    $("timer-alert-body").textContent = many
+      ? `${finishedTimers.join(" · ")} — time to check your food.`
+      : `${finishedTimers[0]} — time to check your food.`;
+    box.classList.remove("hidden");
     $("btn-timer-dismiss").focus({ preventScroll: true });
     markFocus($("btn-timer-dismiss"));
   }
 
+  /**
+   * Start a timer for the step on screen. Pressing it twice for the same step
+   * restarts that timer rather than stacking a duplicate — one step, one timer —
+   * and everything else already counting carries on untouched.
+   */
+  function addStepTimer() {
+    if (!ensureRack()) { showToast("Timer engine not loaded.", 3000); return; }
+    const seconds = suggestedTimerSeconds();
+    const label = stepTimerLabel();
+    const already = label ? rack.findByLabel(label) : null;
+    const entry = rack.add(seconds, label);
+    if (!entry) {
+      showToast(`That is as many timers as this kitchen tracks (${rack.maxTimers}).`, 3500);
+      return;
+    }
+    rack.start(entry.id);
+    showTimers();
+    showToast(already
+      ? `⏱ Restarted ${label || "the timer"} at ${fmt(seconds)}`
+      : `⏱ ${label || "Timer"} — ${fmt(seconds)}`, 3500);
+    focusEl(timerRowFocus(entry.id));
+  }
+
+  /** The row's own Start/Pause button, so the remote lands somewhere useful. */
+  function timerRowFocus(id) {
+    const row = document.querySelector(`.timer-row[data-timer-id="${id}"]`);
+    const button = row && row.querySelector("button[data-action='toggle']");
+    return button || $("btn-timer-close");
+  }
+
+  /** One delegated handler for every row, so the rows stay disposable. */
+  function onTimerRowClick(event) {
+    const button = event.target.closest("button[data-action]");
+    if (!button || !rack) return;
+    const row = button.closest("[data-timer-id]");
+    const entry = row ? rack.get(row.dataset.timerId) : null;
+    if (!entry) return;
+
+    const label = entry.label || "timer";
+    if (button.dataset.action === "toggle") {
+      if (entry.timer.state === "running") rack.pause(entry.id);
+      else rack.start(entry.id);
+      setVoiceStatus(`${label} ${entry.timer.state === "running" ? "started" : "paused"}`);
+    } else if (button.dataset.action === "remove") {
+      rack.remove(entry.id);
+      // Removing a finished timer also retires it from the alert's list.
+      finishedTimers = finishedTimers.filter(name => name !== label);
+      renderTimerAlert();
+      showToast(`Removed ${label}`, 2500);
+    }
+  }
+
+  function restoreTimers() {
+    if (!T) return;
+    let raw = null;
+    try { raw = localStorage.getItem(TIMER_KEY); } catch (e) { raw = null; }
+    if (!raw) { renderTimers(); return; }
+
+    let restored = null;
+    try { restored = T.TimerRack.fromJSON(raw, onRackChange); } catch (e) { restored = null; }
+    if (!restored) { localStorage.removeItem(TIMER_KEY); renderTimers(); return; }
+
+    rack = restored;
+    const finished = rack.done();
+    const live = rack.active();
+    if (finished.length) {
+      // Timers that ran out while the app was closed are stated, not resurrected.
+      finishedTimers = finished.map(e => e.label || "Timer");
+      rack.clearDone();
+      renderTimerAlert();
+      showToast(`⏰ ${finishedTimers.join(" · ")} finished while you were away.`, 6000);
+    }
+    if (live.length) {
+      // Say "press Start to resume" and then make it findable: a restored timer
+      // the cook cannot see is a timer they will not restart.
+      showTimers();
+      showToast(`⏱ ${live.length} timer${live.length === 1 ? "" : "s"} restored — ` +
+        `${fmt(live[0].timer.remainingSeconds)} left. Press Start to resume.`, 5000);
+    }
+    renderTimers();
+  }
+
   function dismissTimerAlert() {
+    // Acknowledging the alert does not erase the finished timers: the cook can
+    // still see which one rang, and clear them when they are done reading.
+    finishedTimers = [];
     $("timer-alert").classList.add("hidden");
     focusEl(defaultFocus());
   }
@@ -1036,16 +1174,46 @@
     if (t.includes("repeat") || t.includes("say that again")) { if (currentRecipe) { speak(scaledSteps()[currentStep]); setVoiceStatus("Repeating step"); return; } }
     if (t.includes("read") || t.includes("speak")) { if (currentRecipe) { speak(scaledSteps()[currentStep]); return; } }
     if (t.includes("timer")) {
-      if (t.includes("set")) {
-        $("btn-timer").click();
+      if (t.includes("set") || t.includes("add") || t.includes("start a")) {
         const secs = suggestedTimerSeconds();
-        setVoiceStatus(`Timer set for ${fmt(secs)}`);
-        speak(`Timer set for ${humanDuration(secs)}`);
+        addStepTimer();
+        setVoiceStatus(`Timer added for ${humanDuration(secs)}`);
+        speak(`Timer added for ${humanDuration(secs)}`);
         return;
       }
-      if (t.includes("start")) { startTimer(); setVoiceStatus("Timer started"); return; }
-      if (t.includes("pause")) { pauseTimer(); setVoiceStatus("Timer paused"); return; }
-      if (t.includes("cancel") || t.includes("stop")) { pauseTimer(); setVoiceStatus("Timer cancelled"); return; }
+      if (t.includes("pause") || t.includes("stop") || t.includes("cancel")) {
+        const counting = rack ? rack.running().length : 0;
+        if (counting) ensureRack().pauseAll();
+        setVoiceStatus(counting
+          ? `${counting} timer${counting === 1 ? "" : "s"} paused`
+          : "Nothing was counting");
+        if (counting) speak(`Paused ${counting === 1 ? "the timer" : `${counting} timers`}`);
+        return;
+      }
+      if (t.includes("start") || t.includes("resume")) {
+        const next = rack && rack.next();
+        if (next) {
+          rack.start(next.id);
+          setVoiceStatus(`Started ${next.label || "the timer"}`);
+          speak(`Started ${next.label || "the timer"}`);
+        } else {
+          setVoiceStatus("There is no timer waiting to start");
+          speak("There is no timer waiting to start");
+        }
+        return;
+      }
+      // "what timers are running" — the answer a single-timer app cannot give.
+      const live = rack ? rack.active() : [];
+      if (live.length) {
+        const soonest = live[0];
+        setVoiceStatus(`${live.length} timer${live.length === 1 ? "" : "s"} — next ${fmt(soonest.timer.remainingSeconds)}`);
+        speak(`You have ${live.length} timer${live.length === 1 ? "" : "s"} going. ` +
+          `Next is ${soonest.label || "a timer"}, ${soonest.timer.speak()} left.`);
+      } else {
+        setVoiceStatus("No timers are running");
+        speak("No timers are running");
+      }
+      return;
     }
     setVoiceStatus("I didn't catch that. Try next step, or set a timer.");
   }
@@ -1504,7 +1672,7 @@
     // A running timer keeps counting and the step we reached is kept too: you
     // set them so you could walk away, so both are offered back on the home
     // screen instead of being quietly thrown out.
-    hideTimer();
+    hideTimers();
     releaseWakeLock();
     currentRecipe = null; currentMatch = null; currentHave = null; activeSwaps = {};
     viewRecipe.classList.add("hidden");
@@ -1515,25 +1683,31 @@
   });
   $("btn-prev").addEventListener("click", () => { if (currentStep > 0) { currentStep -= 1; renderStep(); } });
   $("btn-next").addEventListener("click", () => { if (currentStep < scaledSteps().length - 1) { currentStep += 1; renderStep(); } });
-  $("btn-timer").addEventListener("click", () => {
-    // don't clobber a timer that is already counting
-    if (!timer || timer.state === "done") setTimerSeconds(suggestedTimerSeconds());
-    showTimer();
-    renderTimer();
-    focusEl($("btn-timer-start").disabled ? $("btn-timer-pause") : $("btn-timer-start"));
+  $("btn-timer").addEventListener("click", addStepTimer);
+  $("timer-list").addEventListener("click", onTimerRowClick);
+  $("btn-timer-pause-all").addEventListener("click", () => {
+    const counting = rack ? rack.running().length : 0;
+    if (!counting) { showToast("Nothing is counting right now.", 2500); return; }
+    ensureRack().pauseAll();
+    showToast(`⏸ Paused ${counting} timer${counting === 1 ? "" : "s"}`, 2500);
   });
-  $("btn-timer-start").addEventListener("click", startTimer);
-  $("btn-timer-pause").addEventListener("click", pauseTimer);
-  $("btn-timer-reset").addEventListener("click", resetTimer);
+  $("btn-timer-clear-done").addEventListener("click", () => {
+    const cleared = rack ? rack.clearDone() : 0;
+    finishedTimers = [];
+    renderTimerAlert();
+    showToast(cleared ? `Cleared ${cleared} finished timer${cleared === 1 ? "" : "s"}` : "No finished timers to clear", 2500);
+  });
+  $("btn-timer-close").addEventListener("click", () => {
+    hideTimers();
+    focusEl(defaultFocus());
+  });
   $("btn-timer-dismiss").addEventListener("click", dismissTimerAlert);
   $("btn-timer-badge").addEventListener("click", () => {
-    // The timer panel is global state rather than part of a view, so this works
-    // from the home screen too — you set the timer so you could walk away.
-    if (!timer) return;
-    showTimer();
-    renderTimer();
-    const target = $("btn-timer-start").disabled ? $("btn-timer-pause") : $("btn-timer-start");
-    focusEl(target);
+    // Timers are global state rather than part of a view, so this works from the
+    // home screen too — you set them so you could walk away.
+    showTimers();
+    const soonest = rack && rack.next();
+    focusEl(soonest ? timerRowFocus(soonest.id) : $("btn-timer-close"));
     $("timer-display").scrollIntoView({ block: "center", behavior: "smooth" });
   });
   $("btn-speak").addEventListener("click", () => { if (currentRecipe) speak(scaledSteps()[currentStep]); });
@@ -1625,8 +1799,9 @@
     renderIngredientSuggestions();
     initPantry();
     restoreMuteState();
-    restoreTimer();
-    renderTimer();
+    ensureRack();
+    restoreTimers();
+    renderTimers();
     renderResume();
 
     voiceStatusLive = false;

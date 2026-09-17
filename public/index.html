@@ -71,7 +71,8 @@
         <li>"what can I cook with <em>chicken and garlic</em>" — smart match</li>
         <li>"next step" / "previous step"</li>
         <li>"repeat step"</li>
-        <li>"set a timer" / "start timer" / "pause timer"</li>
+        <li>"set a timer" — adds one, so several pots can run at once</li>
+        <li>"what timers are running" / "pause timers"</li>
         <li>"filter vegan" / "vegetarian" / "gluten-free"</li>
         <li>"I'm allergic to <em>dairy</em>" — hide recipes that carry it</li>
       </ul>
@@ -115,16 +116,21 @@
       <p id="swap-banner" class="swap-banner hidden"></p>
     </section>
   </main>
-  <!-- The timer is global state, not owned by a view: you set it so you could
-       walk away, so its controls must be reachable from any screen. -->
-  <section id="timer-display" class="timer hidden" aria-label="Timer">
-    <div id="timer-time" class="timer-time" aria-live="off">05:00</div>
-    <div id="timer-state" class="timer-state">ready</div>
-    <div class="timer-controls">
-      <button id="btn-timer-start" class="btn small">Start</button>
-      <button id="btn-timer-pause" class="btn small">Pause</button>
-      <button id="btn-timer-reset" class="btn small">Reset</button>
+  <!-- Timers are global state, not owned by a view: you set one so you could
+       walk away, so the list must be reachable from any screen. It is a list
+       rather than one clock because cooking is parallel — the rice simmers
+       while the chicken rests. -->
+  <section id="timer-display" class="timer hidden" aria-label="Timers">
+    <div class="timer-head">
+      <span class="timer-title">⏱ Timers <span id="timer-count" class="timer-count">0</span></span>
+      <div class="timer-head-actions">
+        <button id="btn-timer-pause-all" class="btn small">Pause all</button>
+        <button id="btn-timer-clear-done" class="btn small">Clear finished</button>
+        <button id="btn-timer-close" class="btn small">Hide</button>
+      </div>
     </div>
+    <ul id="timer-list" class="timer-list" aria-live="polite"></ul>
+    <p id="timer-empty" class="timer-empty">No timers yet — open a step and press “Set timer”, or ask for one by voice.</p>
   </section>
   <footer id="footer">
     <span>CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</span>

@@ -70,7 +70,7 @@ test("the service worker pre-caches every script the page needs offline", () => 
 test("the offline cache version was bumped when the shell grew", () => {
   const match = /CACHE_VERSION\s*=\s*"([^"]+)"/.exec(sw);
   assert.ok(match, "the service worker must declare a cache version");
-  assert.notStrictEqual(match[1], "cookalong-v5", "the shell gained files, so the cache must be bumped");
+  assert.notStrictEqual(match[1], "cookalong-v6", "the cached shell changed, so the cache must be bumped");
 });
 
 test("the shipped engines are byte-identical to their src/ originals", () => {

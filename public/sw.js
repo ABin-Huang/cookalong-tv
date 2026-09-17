@@ -8,7 +8,7 @@
  * the shell changes — the old cache is deleted on activate.
  */
 
-const CACHE_VERSION = "cookalong-v6";
+const CACHE_VERSION = "cookalong-v7";
 
 const SHELL = [
   "./",

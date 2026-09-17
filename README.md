@@ -57,10 +57,16 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   quantities and recipe-level substitution overrides.
 - **Remote-first navigation** — arrow keys move focus, OK selects, Back
   returns. The whole app is drivable from a Fire TV remote, not just voice.
-- **A timer you can walk away from** — wall-clock based (no drift), survives a
-  reload or the app being backgrounded, keeps counting while you browse other
-  recipes, and announces itself with a chime plus a full-screen alert when it
-  finishes.
+- **Timers that run at the same time, because cooking does** — the rice simmers
+  for 18 minutes while the chicken rests for 5 and the oven counts down from 20.
+  Each timer is named after the dish and step it belongs to, so the alert says
+  "Rice — time to check your food" instead of the useless "Timer done". Starting
+  a second timer no longer cancels the first, pressing "Set timer" twice on one
+  step restarts that timer rather than stacking a duplicate, and the badge shows
+  the most urgent one with a `+2` for the rest. Wall-clock based (no drift),
+  survives a reload or the app being backgrounded, keeps counting while you
+  browse other recipes, and ends with a chime plus a full-screen alert. Ask by
+  voice — "what timers are running" answers.
 - **Works offline** — a service worker pre-caches the app shell, so the kitchen
   UI still opens with no network.
 - **Honest scoring** — every match can explain itself: which ingredients
@@ -80,7 +86,7 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
 | `skill/` | Alexa Skills Kit skill (Node.js, deployable to AWS Lambda) |
 | `src/recipes.js` | Recipe engine: 10 structured recipes, dietary filters, voice-friendly steps |
 | `src/ingredients.js` | Ingredient intelligence: normalization, weighted matching, substitutions, allergen-aware profiles, pantry (UMD — shared by browser & skill) |
-| `src/timer.js` | Smart timer engine (natural-language durations, drift-free timer, step-linked durations, persistence snapshots) |
+| `src/timer.js` | Smart timer engine: natural-language durations, a drift-free `Timer`, and a `TimerRack` that runs several at once (step-linked durations, persistence snapshots) |
 | `src/capabilities.js` | Device capability detection: can this device speak, listen, hold a wake lock, persist? (UMD) |
 | `src/progress.js` | Cooking-progress snapshots so a reload does not lose your place (UMD) |
 | `src/servings.js` | Serving scaling: amount arithmetic plus the noun agreement that makes a scaled recipe read as written (UMD) |
@@ -122,7 +128,7 @@ npm run check:web    # verify they match src/ (also runs before npm test and in 
 
 ```bash
 npm install --prefix skill   # once: the skill integration tests need ask-sdk-core
-npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 167 tests
+npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 192 tests
 ```
 
 Two of those tests exist to catch drift rather than logic, because both places
@@ -214,17 +220,19 @@ unnoticed.
 4. At the cheese step, the swap panel offers cheddar or nutritional yeast →
    apply it and watch the step text change from "grated parmesan" to
    "cheddar cheese"; undo restores it.
-5. Walk to the step that says "cover and cook on low for 18 minutes" — the ⏱
-   button now offers 18:00 because the timer read the step. Start it: it keeps
-   counting while you browse back to the recipe list.
+5. Walk to the step that says "stirring often, for about 18 minutes" — the ⏱
+   button now offers 18:00 because the timer read the step. Start it, then step
+   back and set a second one: both run side by side, each named after its own
+   step, and the corner badge reads "18:00 +1". Let the short one run out and
+   the alert names it rather than saying "Timer done".
 6. Press ＋ on **Cooking for** until it reads 6 — the whole recipe rewrites
    itself for the bigger pot: "1 onion" becomes "3 onions", "250g rice" becomes
    "750g rice", and the step prose scales in place. Point out what does *not*
    move: "stirring often, for about 18 minutes" is still 18 minutes, and the
    header now quotes in-total calories because that is what is in the pan.
-7. Reload the page. The timer is still counting *and* the home screen offers
-   "You were on step 6 of 7" → **Resume cooking** puts you back on that step
-   with the swap still applied.
+7. Reload the page. Both timers come back (paused, with the time they had left)
+   *and* the home screen offers "You were on step 6 of 7" → **Resume cooking**
+   puts you back on that step with the swap still applied.
 8. Open **Device check** → the probes for this device, and **Copy report** for
    a bug report anyone can paste.
 9. Drive the whole thing with the remote: arrows move, OK selects, Back

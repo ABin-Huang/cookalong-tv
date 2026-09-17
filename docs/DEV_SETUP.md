@@ -84,8 +84,8 @@ npm test
 
 Covers the recipe engine (listing, filtering, step formatting), the ingredient
 intelligence engine (matching, substitutions, pantry), the timer engine
-(duration parsing, drift-free ticking, persistence round-trips), the capability
-probes and the serving scaler.
+(duration parsing, drift-free ticking, the multi-timer rack, persistence
+round-trips), the capability probes and the serving scaler.
 
 ## Service worker
 

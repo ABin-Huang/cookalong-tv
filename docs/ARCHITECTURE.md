@@ -25,7 +25,7 @@ behavior consistent and easy to test.
 │  Core engines (UMD: CommonJS in Node, window.* in the app)│
 │  src/recipes.js      — recipes, dietary filters, steps   │
 │  src/ingredients.js  — matching, swaps, allergen profiles│
-│  src/timer.js        — duration parsing, stateful timer  │
+│  src/timer.js        — duration parsing, timers, and a rack│
 │  src/capabilities.js — what this device can actually do  │
 │  src/progress.js     — resume-where-you-left-off snapshots│
 │  src/servings.js     — rescaling a recipe to a new yield  │
@@ -43,12 +43,11 @@ offered by Alexa come from the same function, so they cannot disagree.
 
 - `index.html` — home (recipe grid, diet chips, allergy chips, resume card,
   kitchen panel) and recipe view (servings stepper, ingredient list, step card,
-  timer panel), plus the global timer section and the Device check dialog. The
-  timer lives outside both views because it is state you set so you could walk
-  away.
+  timer hint), plus the global timer list and the Device check dialog. Timers
+  live outside both views because they are state you set so you could walk away.
 - `app.js` — rendering, filtering, step navigation, live swaps, yield scaling,
-  progress persistence, capability probing, and D-pad focus handling (all four
-  arrows, plus Back).
+  the timer rack, progress persistence, capability probing, and D-pad focus
+  handling (all four arrows, plus Back).
 
 The chosen yield is stored once for the whole kitchen rather than per recipe:
 how many people you are cooking for is a property of the evening, not of the
@@ -88,7 +87,33 @@ claim the code can back up without a device-linking backend.
 - `timer.js` — `parseDuration("1 hour 30 minutes") -> 5400`, a stateful `Timer`
   class (start / pause / resume / stop, `format()` MM:SS, `speak()`), and
   `stepDurationSeconds(stepText)` which reads a step's own cooking time so the
-  timer can follow the recipe instead of a fixed default.
+  timer can follow the recipe instead of a fixed default. `TimerRack` holds
+  several timers at once — see below.
+
+### Cooking is parallel, so timers are too
+
+The rice simmers for 18 minutes while the chicken rests for 5 and the oven
+counts down from 20. A single timer forces the cook to choose which thing to
+forget, so `TimerRack` keeps them all, each named, each finishing on its own
+schedule.
+
+Three decisions make a rack usable rather than just a list:
+
+- **Naming is the feature.** "Timer done" is useless when three are running. Every
+  timer carries the dish and step it belongs to, so the alert says "Rice — time
+  to check your food". Ask by voice — "what timers are running" answers.
+- **Asking twice restarts, it does not duplicate.** Pressing "Set timer" twice on
+  one step wants one timer, restarted, not two racing each other. The rack
+  matches on label and replaces; the button relabels itself to "Restart timer".
+- **Redrawing must not steal focus.** A rack ticks every second, so the list is
+  *reconciled* — rows and buttons are updated in place, never rebuilt — or the
+  remote's focus would jump to nowhere once a second while a cook is reaching
+  for Pause.
+
+Finished timers stay visible until dismissed, because "which pot rang?" is a
+question the screen should answer. A rack restored from storage comes back
+paused, timed from its recorded deadline: the minutes the app spent closed are
+accounted for, not handed back.
 - `capabilities.js` — runtime probes for speech output, speech input, wake lock
   and storage, plus `summarize()` collapsing them into "is voice a real channel
   or is the screen the only one?" and `formatReport()` for bug reports.

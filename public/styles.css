@@ -206,8 +206,22 @@ body.screen-first .step-card { min-height: 260px; }
 .btn.primary { background: var(--accent); border-color: var(--accent); color: #16110c; font-weight: 700; }
 .btn.small { padding: 10px 22px; font-size: 18px; }
 .btn:disabled { opacity: .35; cursor: not-allowed; }
-.timer { background: var(--panel); border: 2px solid #33404d; border-radius: 16px; padding: 26px 36px; max-width: 460px; }
-.timer-time { font-size: 64px; font-weight: 800; letter-spacing: 3px; color: var(--accent-2); }
+.timer { background: var(--panel); border: 2px solid #33404d; border-radius: 16px; padding: 26px 36px; max-width: 900px; }
+.timer-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 16px; }
+.timer-title { font-size: 30px; font-weight: 800; color: var(--accent-2); }
+.timer-count { display: inline-block; min-width: 34px; padding: 2px 10px; border-radius: 999px; background: var(--panel-2); color: var(--text); font-size: 20px; font-weight: 700; text-align: center; }
+.timer-head-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.timer-list { list-style: none; display: flex; flex-direction: column; gap: 12px; }
+.timer-row { display: flex; align-items: center; gap: 18px; padding: 14px 20px; background: var(--panel-2); border: 2px solid #33404d; border-radius: 14px; border-left: 6px solid #33404d; }
+.timer-row.running { border-left-color: var(--ok); }
+.timer-row.paused { border-left-color: var(--accent-2); }
+.timer-row.done { border-left-color: #e56b6f; background: #2a1518; }
+.timer-row-label { flex: 1; min-width: 180px; font-size: 21px; }
+.timer-row.done .timer-row-label { color: #ffb3b5; }
+.timer-row-time { font-size: 34px; font-weight: 800; letter-spacing: 2px; color: var(--accent-2); font-variant-numeric: tabular-nums; }
+.timer-row-state { color: var(--muted); font-size: 17px; min-width: 130px; text-transform: capitalize; }
+.timer-row-actions { display: flex; gap: 10px; }
+.timer-empty { color: var(--muted); font-size: 19px; }
 .timer-controls { display: flex; gap: 14px; margin-top: 16px; }
 #footer { text-align: center; color: var(--muted); padding: 40px 20px 30px; font-size: 17px; }
 .toast { position: fixed; bottom: 44px; left: 50%; transform: translateX(-50%); background: #0d1117; color: var(--text); border: 1px solid #33404d; border-radius: 999px; padding: 14px 30px; font-size: 20px; box-shadow: 0 8px 26px rgba(0,0,0,.5); z-index: 50; }
