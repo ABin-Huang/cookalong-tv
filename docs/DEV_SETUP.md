@@ -21,10 +21,13 @@ everything runs on plain Node.js and the browser. The only dependency package
 ## Run the web app
 
 ```bash
-npm start          # python3 -m http.server 8080 --directory public
+npm start          # zero-dependency static server (scripts/serve.js) on :8080
 ```
 
 Then open http://localhost:8080.
+
+`npm start -- 9000` picks a different port. The old implementation shelled out
+to `python3 -m http.server`, which does not exist on Windows.
 
 Or, to test the UI as a local file: open `public/index.html` directly in a
 browser (data is bundled in `public/recipes-data.js`, so no server is strictly
@@ -33,17 +36,43 @@ required).
 ### What to try
 
 - Filter recipes by **Vegetarian / Vegan / Gluten-free** chips.
-- Open a recipe → follow steps with **Previous / Next** (or Arrow keys).
-- Click **Set timer** → Start / Pause / Reset.
+- Navigate with the **arrow keys** (Fire TV remote), press **Enter/Space** to
+  select, **Escape** to go back — the same bindings a remote sends.
+- Open a recipe → follow steps with **Previous / Next**.
+- Use the **swap panel** under the controls to substitute a missing ingredient;
+  the step text rewrites itself and **Undo** puts it back.
+- Open a match card's **Why N%?** to see the weighted scoring breakdown.
+- Click **Set timer** → Start / Pause / Reset. The timer keeps counting while
+  you browse other screens, survives a reload, and alerts you when it lands.
+- Toggle **Voice on/off** in the header to silence spoken guidance.
+
+## Editing the shared engines
+
+`public/ingredients-engine.js`, `public/timer-engine.js` and
+`public/recipes-data.js` are **generated** from `src/`. Edit `src/` only, then:
+
+```bash
+npm run build:web    # write the public/ artifacts
+npm run check:web    # verify they match src/ — runs before npm test and in CI
+```
 
 ## Run the tests
 
 ```bash
+npm install --prefix skill   # once: skill integration tests need ask-sdk-core
 npm test
 ```
 
-Covers the recipe engine (listing, filtering, step formatting) and the timer
-engine (duration parsing, timer lifecycle).
+Covers the recipe engine (listing, filtering, step formatting), the ingredient
+intelligence engine (matching, substitutions, pantry) and the timer engine
+(duration parsing, drift-free ticking, persistence round-trips).
+
+## Service worker
+
+`public/sw.js` pre-caches the app shell and serves **network-first**, so edits
+show up on reload while the app still opens with no network. If you ever need a
+clean slate, unregister the worker and clear caches from DevTools →
+Application. Bump `CACHE_VERSION` in `sw.js` when the shell file list changes.
 
 ## Alexa skill (optional, for device testing)
 
