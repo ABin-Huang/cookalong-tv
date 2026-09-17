@@ -125,6 +125,17 @@ test("listSubstitutes reports why non-compatible options were rejected", () => {
   assert.ok(rejected.some(r => /not vegetarian|not vegan/.test(r.reason)));
 });
 
+test("listSubstitutes exposes every compatible option for swap pickers", () => {
+  const risotto = RECIPES.find(r => r.id === "mushroom-risotto");
+  const { chosen, compatible, rejected } = I.listSubstitutes(risotto, "cheese");
+  // cheddar (recipe keeps its vegetarian tag) and nutritional yeast both fit
+  assert.ok(compatible.length >= 2, "expected at least two compatible cheese swaps");
+  assert.strictEqual(compatible[0].name, chosen.name, "the first compatible option is the recommended one");
+  assert.ok(compatible.every(o => typeof o.name === "string" && o.note));
+  assert.ok(rejected.every(o => o.reason));
+  assert.ok(!compatible.some(o => rejected.some(r => r.name === o.name)));
+});
+
 test("recipeMatchesProfile filters by diet tags and ingredient allergens", () => {
   const shrimp = RECIPES.find(r => r.id === "lemon-garlic-shrimp");
   assert.strictEqual(I.recipeMatchesProfile(shrimp, { allergens: ["shellfish"] }), false);

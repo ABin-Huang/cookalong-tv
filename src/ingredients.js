@@ -370,19 +370,22 @@
   }
 
   /**
-   * Full swap picture: the chosen compatible option plus every rejected
-   * alternative with a reason. Powers transparent UI and voice lines.
+   * Full swap picture: the recommended option, every other option that also
+   * fits the constraints, and every rejected alternative with a reason.
+   * `compatible[0]` is always `chosen` (findSubstitute returns the first fit).
+   * Powers transparent UI, swap pickers and voice lines.
    */
   function listSubstitutes(recipe, canonical, profile) {
     const constraints = constraintsFor(recipe, profile);
     const chosen = findSubstitute(recipe, canonical, profile);
+    const compatible = [];
     const rejected = [];
     optionsFor(recipe, canonical).forEach(opt => {
-      if (chosen && opt.name === chosen.name) return;
       const reason = rejectedReason(opt, constraints);
-      if (reason) rejected.push({ ...opt, reason });
+      if (reason) { rejected.push({ ...opt, reason }); return; }
+      compatible.push(opt);
     });
-    return { chosen, rejected, constraints };
+    return { chosen, compatible, rejected, constraints };
   }
 
   function escapeRegExp(s) {

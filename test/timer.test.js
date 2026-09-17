@@ -55,3 +55,68 @@ test("Timer pause keeps remaining time", async () => {
   assert.strictEqual(t.remainingSeconds, remaining, "timer must stay paused");
   t.stop();
 });
+
+test("Timer survives a persist/restore round-trip", () => {
+  const t = new Timer(600);
+  t.start();
+  t.pause();
+  const snapshot = JSON.parse(JSON.stringify(t.toJSON()));
+
+  const restored = Timer.fromJSON(snapshot);
+  assert.strictEqual(restored.totalSeconds, 600);
+  assert.strictEqual(restored.remainingSeconds, t.remainingSeconds);
+  assert.strictEqual(restored.state, "paused", "a restored timer waits for the cook");
+  assert.strictEqual(restored.format(), t.format());
+});
+
+test("Timer.fromJSON rejects junk and clamps out-of-range snapshots", () => {
+  assert.strictEqual(Timer.fromJSON(null), null);
+  assert.strictEqual(Timer.fromJSON({}), null);
+  assert.strictEqual(Timer.fromJSON({ totalSeconds: 0 }), null);
+  assert.strictEqual(Timer.fromJSON({ totalSeconds: -30 }), null);
+
+  const over = Timer.fromJSON({ totalSeconds: 60, remainingSeconds: 9999, state: "running" });
+  assert.strictEqual(over.remainingSeconds, 60);
+  assert.strictEqual(over.state, "paused");
+
+  const spent = Timer.fromJSON({ totalSeconds: 60, remainingSeconds: 0, state: "paused" });
+  assert.strictEqual(spent.state, "done");
+});
+
+test("restoring a running timer accounts for time spent with the app closed", () => {
+  // deadline 40s in the future, but the stale counter still says 55s:
+  // the wall clock must win
+  const restored = Timer.fromJSON({
+    totalSeconds: 60,
+    remainingSeconds: 55,
+    state: "running",
+    deadline: Date.now() + 40 * 1000,
+  });
+  assert.ok(restored.remainingSeconds <= 41 && restored.remainingSeconds >= 39,
+    `expected ~40s left, got ${restored.remainingSeconds}`);
+  assert.strictEqual(restored.state, "paused");
+
+  const expired = Timer.fromJSON({
+    totalSeconds: 60,
+    remainingSeconds: 30,
+    state: "running",
+    deadline: Date.now() - 5 * 1000,
+  });
+  assert.strictEqual(expired.remainingSeconds, 0);
+  assert.strictEqual(expired.state, "done", "a timer that expired while away is done");
+});
+
+test("Timer does not drift when ticks arrive late", async () => {
+  // a deadline-based timer derives remaining time from the clock, so a late
+  // tick (throttled tab, sleeping TV) must not lose seconds
+  const t = new Timer(10);
+  t.start();
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  let ticks = 0;
+  t._onTick = () => { ticks += 1; };
+  await new Promise(resolve => setTimeout(resolve, 2200));
+  t.pause();
+  assert.ok(t.remainingSeconds <= 7 && t.remainingSeconds >= 5, `expected ~6s left, got ${t.remainingSeconds}`);
+  assert.ok(ticks > 0, "onTick should keep firing");
+  t.stop();
+});
