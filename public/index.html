@@ -23,11 +23,27 @@
     </div>
   </header>
   <main id="view-home" class="view">
+    <section id="resume-banner" class="resume hidden" aria-live="polite">
+      <div class="resume-text">
+        <h3 class="resume-title">Welcome back</h3>
+        <p id="resume-detail"></p>
+      </div>
+      <div class="resume-actions">
+        <button id="btn-resume" class="btn primary">Resume cooking</button>
+        <button id="btn-resume-dismiss" class="btn small">Start over</button>
+      </div>
+    </section>
     <section id="filters" class="filters">
       <button class="chip active" data-diet="any">All recipes</button>
       <button class="chip" data-diet="vegetarian">Vegetarian</button>
       <button class="chip" data-diet="vegan">Vegan</button>
       <button class="chip" data-diet="gluten-free">Gluten-free</button>
+    </section>
+    <section id="allergens" class="allergens" aria-label="Allergies">
+      <span class="allergens-label">🚫 Leave out:</span>
+      <div id="allergen-chips" class="allergen-chips"></div>
+      <button id="btn-allergens-clear" class="btn small allergens-clear">Clear</button>
+      <span id="allergens-note" class="allergens-note" aria-live="polite"></span>
     </section>
     <section id="recipe-grid" class="grid" aria-label="Recipe list"></section>
     <section id="kitchen" class="kitchen" aria-label="What can I cook">
@@ -57,13 +73,16 @@
         <li>"repeat step"</li>
         <li>"set a timer" / "start timer" / "pause timer"</li>
         <li>"filter vegan" / "vegetarian" / "gluten-free"</li>
+        <li>"I'm allergic to <em>dairy</em>" — hide recipes that carry it</li>
       </ul>
+      <p class="cheatsheet-foot">Voice in and out depends on the device — see <em>Device check</em> below.</p>
     </aside>
   </main>
   <main id="view-recipe" class="view hidden">
     <button id="btn-back" class="btn-back">← All recipes</button>
     <h2 id="recipe-title"></h2>
     <p id="recipe-meta" class="meta"></p>
+    <p id="recipe-allergen" class="recipe-allergen hidden" aria-live="polite"></p>
     <section id="ingredients-panel" class="ingredients-panel" aria-label="What you need">
       <div class="ingredients-head">
         <h4 class="ingredients-title">🧺 What you need</h4>
@@ -100,7 +119,22 @@
       <button id="btn-timer-reset" class="btn small">Reset</button>
     </div>
   </section>
-  <footer id="footer">CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</footer>
+  <footer id="footer">
+    <span>CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</span>
+    <button id="btn-selfcheck" class="btn small footer-check">Device check</button>
+  </footer>
+  <div id="selfcheck" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="selfcheck-title" aria-describedby="selfcheck-summary">
+    <div class="modal-box">
+      <h2 id="selfcheck-title">Device check</h2>
+      <p id="selfcheck-summary" class="modal-summary"></p>
+      <ul id="selfcheck-list" class="probe-list"></ul>
+      <p class="probe-foot">Spoken guidance is only claimed when this device reports an installed voice.</p>
+      <div class="modal-actions">
+        <button id="btn-selfcheck-copy" class="btn small">Copy report</button>
+        <button id="btn-selfcheck-close" class="btn primary">Close</button>
+      </div>
+    </div>
+  </div>
   <div id="timer-alert" class="timer-alert hidden" role="alertdialog" aria-modal="true" aria-labelledby="timer-alert-title" aria-describedby="timer-alert-body">
     <div class="timer-alert-box">
       <div class="timer-alert-ring">⏰</div>
@@ -113,6 +147,8 @@
   <script src="recipes-data.js"></script>
   <script src="ingredients-engine.js"></script>
   <script src="timer-engine.js"></script>
+  <script src="capabilities-engine.js"></script>
+  <script src="progress-engine.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

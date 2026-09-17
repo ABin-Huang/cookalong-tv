@@ -70,6 +70,7 @@ body {
 .m-miss { color: #e56b6f; }
 .match-cook { margin-top: 12px; width: 100%; }
 .kitchen-empty { color: var(--muted); font-size: 20px; grid-column: 1 / -1; }
+.kitchen-hidden { grid-column: 1 / -1; color: #e56b6f; font-size: 19px; padding: 10px 16px; background: #2a1518; border-left: 6px solid #e56b6f; border-radius: 10px; }
 .cheatsheet { margin-top: 34px; background: var(--panel); border: 1px solid #2a333d; border-left: 6px solid var(--accent-2); border-radius: 14px; padding: 20px 28px; max-width: 720px; }
 .cheatsheet h4 { font-size: 22px; margin-bottom: 10px; color: var(--accent-2); }
 .cheatsheet ul { list-style: none; }
@@ -129,6 +130,53 @@ body {
 .timer-alert-box p { font-size: 22px; color: var(--muted); margin-bottom: 26px; }
 @keyframes alertPulse { 50% { transform: scale(1.08); } }
 .timer-alert-ring { animation: alertPulse 1s infinite; }
+
+/* ---- Device capability state ----
+   When this device cannot speak, the screen becomes the primary channel, so
+   the step text gets bigger rather than merely leaving the cook with a button
+   that does nothing. */
+#voice-status.nospeech .pulse { background: var(--accent-2); animation: none; box-shadow: none; }
+body.screen-first .step-text { font-size: 38px; }
+body.screen-first .step-card { min-height: 260px; }
+
+/* ---- Allergies ---- */
+.allergens { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 26px; padding: 14px 20px; background: var(--panel); border: 2px solid #2a333d; border-left: 6px solid #e56b6f; border-radius: 14px; }
+.allergens-label { color: #e56b6f; font-size: 20px; font-weight: 700; }
+.allergen-chips { display: flex; gap: 10px; flex-wrap: wrap; flex: 1; min-width: 240px; }
+.allergen-chip { padding: 8px 18px; font-size: 17px; }
+.allergen-chip.active { background: #e56b6f; border-color: #e56b6f; color: #16110c; font-weight: 700; }
+.allergens-clear { white-space: nowrap; }
+.allergens-clear:disabled { opacity: .35; cursor: not-allowed; }
+.allergens-note { color: var(--muted); font-size: 17px; }
+.allergens-note.warn { color: var(--accent-2); }
+
+/* ---- Recipe allergen banner ---- */
+.recipe-allergen { font-size: 20px; margin-bottom: 24px; padding: 12px 20px; border-radius: 12px; background: var(--panel-2); border-left: 6px solid #33404d; color: var(--muted); }
+.recipe-allergen.conflict { background: #2a1518; border-left-color: #e56b6f; color: #ffb3b5; }
+
+/* ---- Resume card ---- */
+.resume { display: flex; align-items: center; justify-content: space-between; gap: 20px; flex-wrap: wrap; padding: 22px 28px; margin-bottom: 28px; background: var(--panel); border: 2px solid var(--accent); border-radius: 16px; }
+.resume-title { font-size: 24px; color: var(--accent); margin-bottom: 6px; }
+.resume-text p { font-size: 19px; color: var(--muted); }
+.resume-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+
+/* ---- Device check dialog ---- */
+.modal { position: fixed; inset: 0; z-index: 210; display: flex; align-items: center; justify-content: center; background: rgba(6, 8, 11, .85); padding: 40px 20px; }
+.modal-box { background: var(--panel); border: 3px solid #33404d; border-radius: 22px; padding: 34px 40px; max-width: 820px; width: 100%; max-height: 86vh; overflow: auto; }
+.modal-box h2 { font-size: 32px; margin-bottom: 10px; }
+.modal-summary { font-size: 21px; color: var(--accent-2); margin-bottom: 20px; }
+.probe-list { list-style: none; display: grid; gap: 8px; margin-bottom: 18px; }
+.probe-row { display: flex; align-items: baseline; gap: 14px; font-size: 19px; padding: 8px 0; border-bottom: 1px solid #232c35; }
+.probe-name { flex: 1; }
+.probe-detail { color: var(--muted); font-size: 16px; }
+.probe-state { font-size: 16px; font-weight: 700; white-space: nowrap; }
+.probe-state.ok { color: var(--ok); }
+.probe-state.warn { color: var(--accent-2); }
+.probe-state.bad { color: #e56b6f; }
+.probe-foot { font-size: 16px; color: var(--muted); font-style: italic; margin-bottom: 22px; }
+.modal-actions { display: flex; gap: 14px; flex-wrap: wrap; }
+.footer-check { margin-left: 16px; }
+.cheatsheet-foot { margin-top: 12px; font-size: 17px; color: var(--muted); }
 
 /* ---- Engine load failure ---- */
 .engine-error { color: var(--danger-text, #f09595); font-size: 19px; }

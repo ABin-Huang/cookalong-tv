@@ -19,8 +19,11 @@
   let currentMatch = null;      // the kitchen match a recipe was opened from, if any
   let currentHave = null;       // the ingredient set that match was scored against
   let activeSwaps = {};         // canonical -> substitution option currently applied
+  let activeAllergens = new Set();  // allergens the cook has asked us to avoid
 
   const MUTE_KEY = "cookalong.muted.v1";
+  const ALLERGY_KEY = "cookalong.allergies.v1";
+  const PROGRESS_KEY = "cookalong.progress.v1";
 
   /** Escape untrusted text before it is interpolated into innerHTML. */
   function esc(value) {
@@ -46,18 +49,51 @@
 
   function renderGrid() {
     grid.innerHTML = "";
-    const filtered = activeDiet === "any" ? recipes : recipes.filter(r => r.diet.includes(activeDiet));
-    if (!filtered.length) { grid.innerHTML = `<p class="empty">No recipes match “${esc(activeDiet)}” — try another filter.</p>`; return; }
-    filtered.forEach(r => grid.appendChild(cardFor(r)));
+    const dietFiltered = activeDiet === "any" ? recipes : recipes.filter(r => r.diet.includes(activeDiet));
+    // The diet chip already narrowed this list, so anything still removed here
+    // was removed for an allergen — which makes the count safe to state plainly
+    // instead of hedging about which filter did it.
+    const visible = engine
+      ? dietFiltered.filter(r => engine.recipeMatchesProfile(r, currentProfile()))
+      : dietFiltered;
+    const hidden = dietFiltered.length - visible.length;
+
+    const note = $("allergens-note");
+    if (note) {
+      const bits = [];
+      if (hidden) bits.push(`${hidden} recipe${hidden === 1 ? "" : "s"} hidden because of your allergies`);
+      if (activeAllergens.size) bits.push(`avoiding ${[...activeAllergens].join(", ")}`);
+      note.textContent = bits.join(" · ");
+      note.classList.toggle("warn", hidden > 0);
+    }
+
+    if (!visible.length) {
+      grid.innerHTML = hidden
+        ? '<p class="empty">Every recipe that matches also contains something you asked to avoid. Clear an allergy to bring them back.</p>'
+        : `<p class="empty">No recipes match “${esc(activeDiet)}” — try another filter.</p>`;
+      return;
+    }
+    visible.forEach(r => grid.appendChild(cardFor(r)));
   }
 
-  function openRecipe(id, match, have) {
+  /**
+   * `restore` (optional) is a saved progress snapshot — { step, swaps } — used
+   * when the cook comes back to a dish they were halfway through. Anything else
+   * is a fresh start, which discards the old position on purpose.
+   */
+  function openRecipe(id, match, have, restore) {
     currentRecipe = recipes.find(r => r.id === id) || null;
     if (!currentRecipe) return;
-    currentStep = 0;
+
+    const total = currentRecipe.steps.length;
+    const asked = restore ? Number(restore.step) : 0;
+    currentStep = Number.isFinite(asked) ? Math.max(0, Math.min(asked, total - 1)) : 0;
     currentMatch = match || null;
     currentHave = have ? new Set(have) : null;
-    activeSwaps = {};
+    activeSwaps = (restore && restore.swaps) ? { ...restore.swaps } : {};
+
+    if (!restore) clearProgress();   // starting fresh, so the old position is gone
+
     hideTimer();   // a timer already counting keeps running across recipes
     viewHome.classList.add("hidden");
     viewRecipe.classList.remove("hidden");
@@ -65,11 +101,180 @@
     const n = currentRecipe.nutrition;
     $("recipe-meta").textContent = `${currentRecipe.prepTimeMinutes} min · serves ${currentRecipe.serves}` +
       (n ? ` · 🔥 ${n.kcal} kcal · P ${n.protein}g / C ${n.carbs}g / F ${n.fat}g per serving` : "");
-    renderStep(); renderProgress(); renderSwaps(); renderIngredients(); renderTimer();
+    renderStep(); renderProgress(); renderSwaps(); renderIngredients();
+    renderRecipeAllergens(); renderTimer();
     window.scrollTo(0, 0);
     returnFocusId = id;
     focusEl(defaultFocus());
-    speak(`Starting ${currentRecipe.name}. ${displaySteps()[0]}`, true);
+    acquireWakeLock();   // nobody wants the TV to sleep mid-recipe
+    speak(`Starting ${currentRecipe.name}. ${displaySteps()[currentStep]}`, true);
+  }
+
+  /* ---------------- Allergens: the profile the engine already understood ---- */
+
+  /**
+   * Every ingredient-derived check funnels through here. The engine is
+   * fail-closed: a swap or a recipe that is not *proven* compatible with these
+   * allergens is never offered, so keeping the set accurate is what makes the
+   * safety claim true rather than decorative.
+   */
+  function currentProfile() {
+    return {
+      diets: activeDiet === "any" ? [] : [activeDiet],
+      allergens: [...activeAllergens],
+    };
+  }
+
+  function saveAllergens() {
+    try {
+      localStorage.setItem(ALLERGY_KEY, JSON.stringify([...activeAllergens]));
+    } catch (e) { /* private mode — the set still applies for this session */ }
+  }
+
+  function restoreAllergens() {
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem(ALLERGY_KEY) || "[]"); } catch (e) { saved = []; }
+    const known = new Set((engine && engine.COMMON_ALLERGENS) || []);
+    activeAllergens = new Set(
+      (Array.isArray(saved) ? saved : [])
+        .map(a => String(a || "").toLowerCase().trim())
+        .filter(a => !known.size || known.has(a))
+    );
+  }
+
+  function renderAllergenChips() {
+    const box = $("allergen-chips");
+    if (!box || !engine) return;
+    box.innerHTML = "";
+    (engine.COMMON_ALLERGENS || []).forEach(allergen => {
+      const chip = document.createElement("button");
+      chip.className = "chip allergen-chip" + (activeAllergens.has(allergen) ? " active" : "");
+      chip.type = "button";
+      chip.dataset.allergen = allergen;
+      chip.setAttribute("aria-pressed", String(activeAllergens.has(allergen)));
+      chip.textContent = allergen;
+      chip.addEventListener("click", () => toggleAllergen(allergen));
+      box.appendChild(chip);
+    });
+    const clear = $("btn-allergens-clear");
+    if (clear) clear.disabled = !activeAllergens.size;
+  }
+
+  function toggleAllergen(allergen) {
+    if (activeAllergens.has(allergen)) activeAllergens.delete(allergen);
+    else activeAllergens.add(allergen);
+    saveAllergens();
+    renderAllergenChips();
+    renderGrid();
+    renderRecipeAllergens();
+    renderSwaps();
+    renderIngredients();
+    if (kitchenResults.children.length) runKitchenMatch();   // re-rank against the new profile
+    const label = activeAllergens.size
+      ? `avoiding ${[...activeAllergens].join(", ")}`
+      : "no allergies set";
+    setVoiceStatus(`Recipe list updated — ${label}`);
+    showToast(activeAllergens.has(allergen)
+      ? `🚫 Hiding recipes with ${allergen}`
+      : `✓ ${allergen} is back on the menu`, 3000);
+  }
+
+  /**
+   * State the allergen position on the recipe itself. Any cook can see what a
+   * dish carries; a cook who marked an allergy gets told, in the strongest
+   * terms the UI has, before they start.
+   */
+  function renderRecipeAllergens() {
+    const box = $("recipe-allergen");
+    if (!box) return;
+    if (!engine || !currentRecipe) { box.classList.add("hidden"); box.textContent = ""; return; }
+
+    const carries = engine.recipeAllergens(currentRecipe);
+    const conflicts = carries.filter(a => activeAllergens.has(a));
+
+    if (conflicts.length) {
+      box.className = "recipe-allergen conflict";
+      box.textContent = `⚠ Contains ${conflicts.join(", ")} — which you asked to avoid. ` +
+        `Swap it below, or press Back for other recipes.`;
+    } else if (carries.length) {
+      box.className = "recipe-allergen";
+      box.textContent = `Contains: ${carries.join(", ")}.`;
+    } else {
+      box.className = "recipe-allergen";
+      box.textContent = "No common allergens detected in this recipe.";
+    }
+    box.classList.remove("hidden");
+  }
+
+  /* ---------------- Cooking progress: come back to the step you left -------- */
+
+  const P = window.CookalongProgress || null;
+
+  function clearProgress() {
+    try { localStorage.removeItem(PROGRESS_KEY); } catch (e) { /* private mode */ }
+  }
+
+  function readProgress() {
+    if (!P) return null;
+    let raw = null;
+    try { raw = localStorage.getItem(PROGRESS_KEY); } catch (e) { return null; }
+    return P.deserialize(raw);
+  }
+
+  /**
+   * Persist the position, and clear it on the last step.
+   *
+   * Reaching the final step means the dish is cooked; offering to "resume" a
+   * finished recipe on the next visit is worse than offering nothing at all.
+   */
+  function saveProgress() {
+    if (!P || !currentRecipe) return;
+    const total = displaySteps().length;
+    if (total > 1 && currentStep >= total - 1) { clearProgress(); return; }
+
+    const snapshot = P.serialize({
+      recipeId: currentRecipe.id,
+      step: currentStep,
+      swaps: activeSwaps,
+      at: Date.now(),
+    });
+    if (!snapshot) return;
+    try { localStorage.setItem(PROGRESS_KEY, JSON.stringify(snapshot)); } catch (e) { /* private mode */ }
+  }
+
+  /**
+   * The timer already outlives a reload; the step did not, so coming back meant
+   * a live countdown on a dish the app had forgotten. This closes that gap and
+   * is the reason it lives on the home screen: it is the first thing a cook
+   * needs after the TV went to sleep mid-recipe.
+   */
+  function renderResume() {
+    const banner = $("resume-banner");
+    if (!banner) return;
+
+    const saved = readProgress();
+    const recipe = saved ? recipes.find(r => r.id === saved.recipeId) : null;
+    if (!P || !P.isResumable(saved) || !recipe) { banner.classList.add("hidden"); return; }
+
+    const total = recipe.steps.length;
+    const step = Math.min(saved.step, total - 1);
+    const swaps = Object.keys(saved.swaps || {}).length;
+    const timerBit = timer && timer.remainingSeconds > 0 && timer.state !== "done"
+      ? ` The timer is still on it — ${fmt(timer.remainingSeconds)} ${timer.state === "paused" ? "paused" : "running"}.`
+      : "";
+
+    $("resume-detail").textContent =
+      `You were on step ${step + 1} of ${total} in ${recipe.name}` +
+      (swaps ? `, with ${swaps} swap${swaps > 1 ? "s" : ""} applied` : "") + "." + timerBit;
+    banner.classList.remove("hidden");
+  }
+
+  function resumeCooking() {
+    const saved = readProgress();
+    if (!saved) { renderResume(); return; }
+    setVoiceStatus(`Back to ${saved.recipeId.replace(/-/g, " ")}, step ${saved.step + 1}`);
+    showToast(`↩ Picking up at step ${saved.step + 1}`, 2500);
+    openRecipe(saved.recipeId, null, null, { step: saved.step, swaps: saved.swaps });
   }
 
   /* ---------------- "What you need": the ingredient list ---------------- */
@@ -164,6 +369,7 @@
     $("btn-prev").disabled = currentStep === 0;
     $("btn-next").disabled = currentStep === total - 1;
     updateTimerButton(); renderProgress(); renderStepTimerHint();
+    saveProgress();
     showToast(`${currentRecipe.name} — Step ${currentStep + 1}`);
   }
 
@@ -262,6 +468,7 @@
     if (t.state === "done") {
       localStorage.removeItem(TIMER_KEY);
       renderTimer();
+      renderResume();   // the banner mentions the timer, so it is now out of date
       playChime();
       speak("Timer done! Time to check your food.");
       showToast("⏰ Timer done! Time to check your food.", 6000);
@@ -371,12 +578,29 @@
 
   let voices = [];
   function loadVoices() { voices = window.speechSynthesis ? window.speechSynthesis.getVoices() : []; }
-  if (window.speechSynthesis) { loadVoices(); window.speechSynthesis.onvoiceschanged = loadVoices; }
+  function onVoicesChanged() {
+    loadVoices();
+    // The voice list can arrive after first paint, so re-measure and let the
+    // UI correct itself rather than staying wrong for the whole session.
+    refreshCapabilities();
+    applyCapabilityUI();
+  }
+  if (window.speechSynthesis) { loadVoices(); window.speechSynthesis.onvoiceschanged = onVoicesChanged; }
   function pickVoice() {
     return voices.find(v => v.lang === "en-US" && /female|Samantha|Zira|Google US English/i.test(v.name)) || voices.find(v => v.lang === "en-US") || null;
   }
   function speak(text, interrupt = false) {
     if (voiceMuted) return;
+    // A device with the API but no installed voice — which is what a Fire TV
+    // is — swallows every utterance without raising an error. Say so once
+    // instead of failing silently for the entire cook.
+    if (capSummary && !capSummary.spokenPrimary) {
+      if (!silentNoticeShown) {
+        silentNoticeShown = true;
+        showToast("🔇 No voice is installed on this device, so steps stay on screen. Device check has the details.", 6000);
+      }
+      return;
+    }
     if (!window.speechSynthesis) return;
     if (interrupt) window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
@@ -384,7 +608,23 @@
     const v = pickVoice(); if (v) utter.voice = v;
     window.speechSynthesis.speak(utter);
   }
-  function setVoiceStatus(text) { const el = $("voice-text"); if (el) el.textContent = text; }
+  function setVoiceStatus(text) {
+    const el = $("voice-text");
+    if (el) el.textContent = text;
+    voiceStatusLive = true;
+  }
+
+  /**
+   * The passive "what this device can do" line. Deliberately does not overwrite
+   * a status the cook just triggered, because the voice list arrives
+   * asynchronously: the first measurement is often wrong, and correcting the
+   * capability line must not clobber "Opening Tomato Basil Pasta".
+   */
+  function setDefaultVoiceStatus() {
+    if (voiceStatusLive) return;
+    const el = $("voice-text");
+    if (el) el.textContent = defaultVoiceStatus();
+  }
 
   function applyMuteState() {
     $("mute-icon").textContent = voiceMuted ? "🔇" : "🔊";
@@ -405,6 +645,226 @@
   function restoreMuteState() {
     try { voiceMuted = localStorage.getItem(MUTE_KEY) === "1"; } catch (e) { voiceMuted = false; }
     applyMuteState();
+  }
+
+  /* ---------------- Device capabilities: does this thing actually speak? ---- */
+
+  const CAP = window.CookalongCapabilities || null;
+  let capabilities = null;
+  let capSummary = null;
+  let silentNoticeShown = false;
+  let voiceStatusLive = false;
+  let wakeLockSentinel = null;
+
+  /** The live browser environment, as plain data the engine can measure. */
+  function readEnvironment() {
+    let store = null;
+    try { store = window.localStorage; } catch (e) { store = null; }   // access itself can throw
+    return {
+      userAgent: navigator.userAgent || "",
+      speechSynthesis: window.speechSynthesis,
+      SpeechRecognition: window.SpeechRecognition,
+      webkitSpeechRecognition: window.webkitSpeechRecognition,
+      wakeLock: navigator.wakeLock,
+      localStorage: store,
+    };
+  }
+
+  function refreshCapabilities() {
+    if (!CAP) return null;
+    capabilities = CAP.detect(readEnvironment());
+    capSummary = CAP.summarize(capabilities);
+    return capSummary;
+  }
+
+  /**
+   * Make the app tell the truth about what it can do here.
+   *
+   * A Fire TV exposes speechSynthesis and installs no voice, so the previous
+   * code called speak() into the void and left a microphone button whose only
+   * possible outcome was an error. Neither is acceptable in a product whose
+   * whole pitch is hands-free: one is silent, the other is a dead control.
+   * So when the device cannot speak, the screen becomes the primary channel
+   * (see `body.screen-first`) and the microphone button is repurposed into the
+   * thing that explains the situation.
+   */
+  function applyCapabilityUI() {
+    if (!capSummary) return;
+    const status = $("voice-status");
+    if (status) status.classList.toggle("nospeech", !capSummary.spokenPrimary);
+    document.body.classList.toggle("screen-first", capSummary.mode === "screen");
+
+    const micLabel = $("mic-label");
+    const micIcon = $("mic-icon");
+    const micBtn = $("btn-voice");
+    if (capSummary.canListen) {
+      if (micLabel) micLabel.textContent = "Voice";
+      if (micIcon) micIcon.textContent = "🎙";
+      if (micBtn) micBtn.title = "Talk to this screen (browser speech recognition)";
+    } else {
+      if (micLabel) micLabel.textContent = "Device check";
+      if (micIcon) micIcon.textContent = "🔍";
+      if (micBtn) micBtn.title = "This screen cannot listen — see what it can do instead";
+    }
+
+    // Voices can arrive after first paint, so the capability line has to be
+    // allowed to correct itself once the real answer is known.
+    setDefaultVoiceStatus();
+  }
+
+  function defaultVoiceStatus() {
+    if (capSummary && !capSummary.spokenPrimary) {
+      return "Spoken guidance unavailable here — steps stay on screen. Say “Alexa, open CookAlong” to hear them.";
+    }
+    return 'Say "Alexa, open CookAlong" — or just use the remote';
+  }
+
+  function probeRows() {
+    const c = capabilities || {};
+    const speech = c.speech || {};
+    const recognition = c.recognition || {};
+    const wakeLock = c.wakeLock || {};
+    const storage = c.storage || {};
+
+    return [
+      {
+        name: "Spoken guidance",
+        detail: speech.status === "no-voices"
+          ? `${speech.voices || 0} voices installed — the API exists but would say nothing`
+          : speech.status === "ok" ? `${speech.voices} voices installed` : "no speechSynthesis at all",
+        state: speech.speakable ? "ok" : "bad",
+        label: speech.speakable ? "works" : (speech.status === "no-voices" ? "silent" : "missing"),
+      },
+      {
+        name: "Voice input in this screen",
+        detail: recognition.supported
+          ? "SpeechRecognition is available"
+          : "no SpeechRecognition — talk through the remote's Alexa button",
+        state: recognition.supported ? "ok" : "warn",
+        label: recognition.supported ? "works" : "unavailable",
+      },
+      {
+        name: "Remote / arrow keys",
+        detail: "D-pad focus handling is built into this page",
+        state: "ok",
+        label: "works",
+      },
+      {
+        name: "Screen wake lock",
+        detail: wakeLock.supported
+          ? "the screen can be held awake while cooking"
+          : "not offered by this browser",
+        state: wakeLock.supported ? "ok" : "warn",
+        label: wakeLock.supported ? "works" : "unavailable",
+      },
+      {
+        name: "Local storage",
+        detail: storage.writable
+          ? "pantry, allergies and progress persist between visits"
+          : "nothing will persist between visits",
+        state: storage.writable ? "ok" : "bad",
+        label: storage.writable ? "works" : "blocked",
+      },
+    ];
+  }
+
+  /**
+   * The paste-ready report. This is the friction-log artefact: it is produced
+   * on the device that misbehaved, so the environment never has to be
+   * reconstructed from memory later.
+   */
+  function selfCheckReport() {
+    if (!CAP) return "CookAlong TV - device check\ncapability engine unavailable";
+    return CAP.formatReport(capabilities, capSummary, { at: new Date().toISOString() });
+  }
+
+  function renderSelfCheck() {
+    refreshCapabilities();
+    if (!capSummary) return;
+
+    const summary = $("selfcheck-summary");
+    if (summary) summary.textContent = `${capSummary.headline} ${capSummary.action}`;
+
+    const list = $("selfcheck-list");
+    if (list) {
+      list.innerHTML = "";
+      probeRows().forEach(row => {
+        const li = document.createElement("li");
+        li.className = "probe-row";
+        const name = document.createElement("span");
+        name.className = "probe-name";
+        name.textContent = row.name;
+        const detail = document.createElement("span");
+        detail.className = "probe-detail";
+        detail.textContent = row.detail;
+        const state = document.createElement("span");
+        state.className = `probe-state ${row.state}`;
+        state.textContent = row.label;
+        li.append(name, detail, state);
+        list.appendChild(li);
+      });
+    }
+    applyCapabilityUI();
+  }
+
+  function openSelfCheck() {
+    if (!CAP) { showToast("Device check is unavailable — the capability engine didn't load.", 4000); return; }
+    renderSelfCheck();
+    $("selfcheck").classList.remove("hidden");
+    focusEl($("btn-selfcheck-close"));
+  }
+
+  function closeSelfCheck() {
+    $("selfcheck").classList.add("hidden");
+    focusEl(defaultFocus());
+  }
+
+  function copySelfCheckReport() {
+    const report = selfCheckReport();
+    const done = () => showToast("📋 Device report copied — paste it into a bug report.", 3500);
+    // The async clipboard API is not guaranteed on a TV browser, so fall back
+    // to the old selection trick rather than leaving the cook with nothing.
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(report).then(done).catch(() => legacyCopy(report, done));
+      return;
+    }
+    legacyCopy(report, done);
+  }
+
+  function legacyCopy(text, done) {
+    try {
+      const area = document.createElement("textarea");
+      area.value = text;
+      area.setAttribute("readonly", "");
+      area.style.position = "fixed";
+      area.style.opacity = "0";
+      document.body.appendChild(area);
+      area.select();
+      const ok = document.execCommand("copy");
+      document.body.removeChild(area);
+      if (ok) done();
+      else showToast("Couldn't copy automatically — the report is on screen above.", 5000);
+    } catch (e) {
+      showToast("Couldn't copy automatically — the report is on screen above.", 5000);
+    }
+  }
+
+  /** Keep the TV awake while a recipe is open. Failure is not worth a dialog. */
+  function acquireWakeLock() {
+    if (!capabilities || !capabilities.wakeLock.supported || wakeLockSentinel) return;
+    if (document.hidden) return;
+    try {
+      navigator.wakeLock.request("screen").then(sentinel => {
+        wakeLockSentinel = sentinel;
+        sentinel.addEventListener("release", () => { wakeLockSentinel = null; });
+      }).catch(() => { /* denied at runtime — cooking still works */ });
+    } catch (e) { /* request threw synchronously */ }
+  }
+
+  function releaseWakeLock() {
+    if (!wakeLockSentinel) return;
+    try { wakeLockSentinel.release(); } catch (e) { /* already released */ }
+    wakeLockSentinel = null;
   }
 
   function handleVoiceCommand(transcript) {
@@ -451,6 +911,10 @@
   }
 
   function toggleVoice() {
+    // No in-page microphone on this device: route to the panel that explains
+    // how to talk, instead of a control whose only outcome is a complaint.
+    if (capSummary && !capSummary.canListen) { openSelfCheck(); return; }
+
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { showToast("Voice recognition isn't supported in this browser.", 4000); return; }
     if (voiceListening && window.__recognition) { window.__recognition.stop(); return; }
@@ -569,14 +1033,36 @@
       kitchenResults.innerHTML = `<p class="kitchen-empty">I couldn't recognise any ingredients. Try things like “chicken, garlic, rice”${got}.</p>`;
       return;
     }
+
     const have = Array.from(new Set([...recognized, ...(pantry ? pantry.all() : [])]));
-    const profile = activeDiet === "any" ? undefined : { diets: [activeDiet], allergens: [] };
-    const matches = engine.topMatches(have, recipes, 25, 5, profile);
+    const profile = currentProfile();
+
+    // The exclusion-aware call is the point: it reports not just which recipes
+    // fit, but which ones were removed and for what reason. Without it an
+    // allergy filter silently shrinks the list with no explanation.
+    const { matches: scored, excluded } = engine.matchRecipesWithExclusions(have, recipes, profile);
+    const matches = scored.filter(m => m.score >= 25).slice(0, 5);
+    const allergyHidden = excluded.filter(m =>
+      (m.excludedReasons || []).some(r => r.startsWith("contains ")));
+
+    kitchenResults.innerHTML = "";
+    if (allergyHidden.length) {
+      const reasons = [...new Set(allergyHidden.flatMap(m => m.excludedReasons))].join(" · ");
+      const note = document.createElement("p");
+      note.className = "kitchen-hidden";
+      note.textContent = `🚫 ${allergyHidden.length} recipe${allergyHidden.length === 1 ? "" : "s"} hidden — ${reasons}.`;
+      kitchenResults.appendChild(note);
+    }
+
     if (!matches.length) {
-      kitchenResults.innerHTML = `<p class="kitchen-empty">Nothing scores high enough with only: ${esc(recognized.map(engine.displayName).join(", "))}. Add more ingredients for better matches.</p>`;
+      // Built as a node rather than by concatenating innerHTML, so the banner
+      // above survives the "nothing scored high enough" case too.
+      const empty = document.createElement("p");
+      empty.className = "kitchen-empty";
+      empty.textContent = `Nothing scores high enough with only: ${recognized.map(engine.displayName).join(", ")}. Add more ingredients for better matches.`;
+      kitchenResults.appendChild(empty);
       return;
     }
-    kitchenResults.innerHTML = "";
     matches.forEach(m => kitchenResults.appendChild(kitchenMatchCard(m, profile, have)));
     speak(`I found ${matches.length} recipes you can make.`);
     setVoiceStatus(`Found ${matches.length} matches for your kitchen`);
@@ -686,10 +1172,6 @@
   /* ---------------- Recipe: live ingredient swaps ---------------- */
   const swapList = $("swap-list");
   const swapPanel = $("swap-panel");
-
-  function currentProfile() {
-    return activeDiet === "any" ? undefined : { diets: [activeDiet], allergens: [] };
-  }
 
   function ingredientLabel(recipe, canonical) {
     const ing = (recipe.ingredients || []).find(i => i.canonical === canonical);
@@ -879,12 +1361,16 @@
 
   filtersBox.addEventListener("click", e => { const chip = e.target.closest(".chip"); if (!chip) return; activateDiet(chip.dataset.diet); });
   $("btn-back").addEventListener("click", () => {
-    // a running timer keeps counting: you set it so you could walk away
+    // A running timer keeps counting and the step we reached is kept too: you
+    // set them so you could walk away, so both are offered back on the home
+    // screen instead of being quietly thrown out.
     hideTimer();
+    releaseWakeLock();
     currentRecipe = null; currentMatch = null; currentHave = null; activeSwaps = {};
     viewRecipe.classList.add("hidden");
     viewHome.classList.remove("hidden");
     renderSwaps();
+    renderResume();
     focusEl(defaultFocus());
   });
   $("btn-prev").addEventListener("click", () => { if (currentStep > 0) { currentStep -= 1; renderStep(); } });
@@ -913,6 +1399,23 @@
   $("btn-speak").addEventListener("click", () => { if (currentRecipe) speak(displaySteps()[currentStep]); });
   $("btn-voice").addEventListener("click", toggleVoice);
   $("btn-mute").addEventListener("click", toggleMute);
+  $("btn-selfcheck").addEventListener("click", openSelfCheck);
+  $("btn-selfcheck-close").addEventListener("click", closeSelfCheck);
+  $("btn-selfcheck-copy").addEventListener("click", copySelfCheckReport);
+  $("btn-resume").addEventListener("click", resumeCooking);
+  $("btn-resume-dismiss").addEventListener("click", () => {
+    clearProgress();
+    renderResume();
+    showToast("Cleared — starting fresh next time", 2500);
+  });
+  $("btn-allergens-clear").addEventListener("click", () => {
+    if (!activeAllergens.size) return;
+    activeAllergens.clear();
+    saveAllergens(); renderAllergenChips(); renderGrid(); renderRecipeAllergens();
+    renderSwaps(); renderIngredients();
+    if (kitchenResults.children.length) runKitchenMatch();
+    showToast("✓ Allergies cleared", 2500);
+  });
   if (kitchenInput) {
     $("btn-kitchen-find").addEventListener("click", runKitchenMatch);
     $("btn-pantry-add").addEventListener("click", saveKitchenInputToPantry);
@@ -927,6 +1430,11 @@
     if (!$("timer-alert").classList.contains("hidden")) {
       // the alert owns the screen until it is dismissed
       if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); dismissTimerAlert(); }
+      else if (DIRS[e.key]) e.preventDefault();
+      return;
+    }
+    if (!$("selfcheck").classList.contains("hidden")) {
+      if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); closeSelfCheck(); }
       else if (DIRS[e.key]) e.preventDefault();
       return;
     }
@@ -948,6 +1456,10 @@
 
   /* ---------------- boot ---------------- */
   function boot() {
+    // Measure the device before anything decides how to talk to the cook.
+    refreshCapabilities();
+    applyCapabilityUI();
+
     if (!engine) {
       kitchenResults.innerHTML =
         '<p class="kitchen-empty engine-error">Ingredient engine failed to load — ' +
@@ -958,6 +1470,11 @@
       });
     }
 
+    // Allergies must be known before the grid is drawn, or the first paint
+    // would show recipes the cook has already asked us to hide.
+    restoreAllergens();
+    renderAllergenChips();
+
     renderGrid();
     renderKitchenChips();
     renderIngredientSuggestions();
@@ -965,6 +1482,16 @@
     restoreMuteState();
     restoreTimer();
     renderTimer();
+    renderResume();
+
+    voiceStatusLive = false;
+    setDefaultVoiceStatus();
+
+    // The wake lock is dropped whenever the page is hidden, so take it back.
+    document.addEventListener("visibilitychange", () => {
+      if (document.hidden) releaseWakeLock();
+      else if (currentRecipe) acquireWakeLock();
+    });
 
     if ("serviceWorker" in navigator && location.protocol.startsWith("http")) {
       navigator.serviceWorker.register("sw.js").catch(() => { /* offline unavailable */ });

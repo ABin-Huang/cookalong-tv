@@ -45,16 +45,34 @@ required).
 - Click **Set timer** → Start / Pause / Reset. The timer keeps counting while
   you browse other screens, survives a reload, and alerts you when it lands.
 - Toggle **Voice on/off** in the header to silence spoken guidance.
+- Tap an allergy chip (**Leave out:**) to hide recipes that carry it.
+- Click **Device check** in the footer to see what this browser reports it can
+  do. On a desktop it will list installed voices; on a Fire TV it will not.
 
 ## Editing the shared engines
 
-`public/ingredients-engine.js`, `public/timer-engine.js` and
+`public/ingredients-engine.js`, `public/timer-engine.js`,
+`public/capabilities-engine.js`, `public/progress-engine.js` and
 `public/recipes-data.js` are **generated** from `src/`. Edit `src/` only, then:
 
 ```bash
 npm run build:web    # write the public/ artifacts
 npm run check:web    # verify they match src/ — runs before npm test and in CI
 ```
+
+## Adding a generated engine
+
+The build, the syntax check, the service worker shell and the web contract test
+each keep their own list of engines, and none of them are derived from the
+others. Adding one means touching all four:
+
+1. `scripts/build-web.js` — add the `src/` → `public/` pair.
+2. `package.json` `check:syntax` — add the new `src/` file.
+3. `public/index.html` — add the `<script>` tag.
+4. `public/sw.js` — add it to `SHELL` and bump `CACHE_VERSION`.
+
+`test/web-contract.test.js` fails if you miss step 3 or 4, and
+`npm run check:web` fails if you forget to run the build.
 
 ## Run the tests
 

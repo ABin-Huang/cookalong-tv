@@ -31,6 +31,18 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   low for 18 minutes" and the ⏱ button offers 18:00 and the step card says so;
   steps that say "per side" are doubled. With no time of its own the button
   falls back to a sensible default for the dish.
+- **Allergy profile** — mark any of nine common allergens (dairy, egg, gluten,
+  shellfish, fish, soy, nuts, peanut, sesame) and those recipes disappear from
+  the grid and the kitchen match, with a count of what was hidden and why. The
+  swaps obey it too: a dairy-allergic cook is offered nutritional yeast, never
+  cheddar. Every recipe also states what it carries, before you commit to it.
+- **A Device check you can paste into a bug report** — the app probes what the
+  device can actually do (voice in, voice out, wake lock, storage) and prints
+  the result, because on a TV browser the honest answer is often "no" and a
+  silent no is worse than a stated one.
+- **Picks up where you left off** — the step you reached and the swaps you
+  applied survive a reload, and the home screen offers to resume them next to
+  the timer that is still counting.
 - **Pantry memory** — mark ingredients as used; the kitchen persists locally
   and future matches exclude them.
 - **10 structured recipes** (up from 4), each with role-weighted ingredients,
@@ -46,9 +58,11 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
 - **Honest scoring** — every match can explain itself: which ingredients
   counted on hand, which earned half credit as a swap, and the weighted total
   behind the percentage.
-- **Voice that never depends on the cloud for the demo** — the Web App uses
-  the Web Speech API when available and always falls back to tap/type; the
-  Alexa skill mirrors the same engine on AWS Lambda.
+- **Voice that tells you the truth about itself** — spoken guidance is only
+  claimed when the device reports an installed voice, and the in-page
+  microphone is only offered when the browser can actually listen. Where it
+  cannot, the screen becomes the primary channel and says so. The Alexa skill
+  mirrors the same engine on AWS Lambda.
 
 ## What's inside
 
@@ -57,10 +71,12 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
 | `public/` | Fire TV Web App (HTML/CSS/JS 10-foot UI, PWA + service worker) |
 | `skill/` | Alexa Skills Kit skill (Node.js, deployable to AWS Lambda) |
 | `src/recipes.js` | Recipe engine: 10 structured recipes, dietary filters, voice-friendly steps |
-| `src/ingredients.js` | Ingredient intelligence: normalization, weighted matching, substitutions, pantry (UMD — shared by browser & skill) |
-| `src/timer.js` | Smart timer engine (natural-language durations, drift-free timer, persistence snapshots) |
+| `src/ingredients.js` | Ingredient intelligence: normalization, weighted matching, substitutions, allergen-aware profiles, pantry (UMD — shared by browser & skill) |
+| `src/timer.js` | Smart timer engine (natural-language durations, drift-free timer, step-linked durations, persistence snapshots) |
+| `src/capabilities.js` | Device capability detection: can this device speak, listen, hold a wake lock, persist? (UMD) |
+| `src/progress.js` | Cooking-progress snapshots so a reload does not lose your place (UMD) |
 | `scripts/` | `build-web.js` syncs `src/` into `public/`; `serve.js` is the dev server |
-| `test/` | Unit tests for the recipe, ingredient & timer engines |
+| `test/` | Unit tests for the recipe, ingredient, timer, capability & progress engines, plus two contract tests |
 
 ## Quick start (web app)
 
@@ -76,9 +92,15 @@ open the top match, and hit **Cook it** — every missing item is flagged as
 swappable or missing on the match card, and the swap panel on the cooking
 screen lets you apply the substitution so the step text updates live.
 
+Then tap an allergy chip and watch the same list shrink with a reason attached,
+and hit **Device check** in the footer to see what the current browser claims it
+can do. If it reports no installed voices, that is not a bug in the app — it is
+the app refusing to pretend.
+
 ## Editing the engines
 
-`public/ingredients-engine.js`, `public/timer-engine.js` and
+`public/ingredients-engine.js`, `public/timer-engine.js`,
+`public/capabilities-engine.js`, `public/progress-engine.js` and
 `public/recipes-data.js` are generated from `src/`. Never edit them by hand —
 change `src/` and re-sync:
 
@@ -91,8 +113,38 @@ npm run check:web    # verify they match src/ (also runs before npm test and in 
 
 ```bash
 npm install --prefix skill   # once: the skill integration tests need ask-sdk-core
-npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 84 tests
+npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 124 tests
 ```
+
+Two of those tests exist to catch drift rather than logic, because both places
+have already been burned by it once:
+
+- `test/skill-contract.test.js` invokes every intent declared in the interaction
+  model and fails if any reaches the error handler.
+- `test/web-contract.test.js` checks that every element `app.js` looks up is
+  declared in `index.html`, that the page loads every engine the script
+  consumes, that the service worker pre-caches them, and that the capability
+  guard is actually present rather than the bare API check it replaced.
+
+## What a Fire TV actually does
+
+Worth knowing before you record a demo, because both failure modes are
+invisible in a desktop browser:
+
+- **Silk exposes `speechSynthesis` and installs no voices.** `speak()` resolves
+  successfully and says nothing, so "hands-free spoken guidance" is silently
+  dead on the target device. The app therefore treats a non-empty voice list —
+  not the API's existence — as the thing that makes speech real, and switches
+  to large on-screen text when it is not.
+- **Silk has no `SpeechRecognition`.** The in-page microphone cannot work, so
+  the button is repurposed to open the Device check instead of failing.
+  Voice *input* on a Fire TV belongs to the remote's Alexa button, which is
+  what the companion Alexa skill is for.
+
+Both are measured at runtime rather than guessed from the user agent, and both
+are reported on the Device check screen with a **Copy report** button so the
+environment can be attached to a bug report instead of described from memory.
+`test/capabilities.test.js` covers the silent-speech case directly.
 
 ## Alexa skill
 
@@ -139,19 +191,25 @@ unnoticed.
 1. "I have mushrooms, rice, onion and garlic" → best match at 96%, every
    missing item flagged as swappable. Hit **Why 96%?** to show the weighted
    breakdown behind the number.
-2. "cook it" → the ingredient list opens with everything tagged (on hand /
+2. Tap **dairy** in the allergy row → four recipes leave the grid and the line
+   underneath says why. Open the risotto: the banner says it contains dairy and
+   points at the swap panel. Clear the allergy.
+3. "cook it" → the ingredient list opens with everything tagged (on hand /
    pantry staple / swap available), then step-by-step guidance begins.
-3. At the cheese step, the swap panel offers cheddar or nutritional yeast →
+4. At the cheese step, the swap panel offers cheddar or nutritional yeast →
    apply it and watch the step text change from "grated parmesan" to
    "cheddar cheese"; undo restores it.
-4. Walk to the step that says "cover and cook on low for 18 minutes" — the ⏱
+5. Walk to the step that says "cover and cook on low for 18 minutes" — the ⏱
    button now offers 18:00 because the timer read the step. Start it: it keeps
-   counting while you browse back to the recipe list, and survives a reload.
-5. Show the timer badge in the header, then let it finish: chime + full-screen
-   alert.
-6. Drive the whole thing with the remote: arrows move, OK selects, Back
+   counting while you browse back to the recipe list.
+6. Reload the page. The timer is still counting *and* the home screen offers
+   "You were on step 6 of 7" → **Resume cooking** puts you back on that step
+   with the swap still applied.
+7. Open **Device check** → the probes for this device, and **Copy report** for
+   a bug report anyone can paste.
+8. Drive the whole thing with the remote: arrows move, OK selects, Back
    returns. Turn the network off and reload — it still opens.
-7. Close on "hands never touched the screen".
+9. Close on "hands never touched the screen".
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design and
 [docs/DEV_SETUP.md](docs/DEV_SETUP.md) for the development environment.
