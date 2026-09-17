@@ -20,10 +20,12 @@
   let currentHave = null;       // the ingredient set that match was scored against
   let activeSwaps = {};         // canonical -> substitution option currently applied
   let activeAllergens = new Set();  // allergens the cook has asked us to avoid
+  let wantedServings = null;        // the yield the cook asked for; null = as written
 
   const MUTE_KEY = "cookalong.muted.v1";
   const ALLERGY_KEY = "cookalong.allergies.v1";
   const PROGRESS_KEY = "cookalong.progress.v1";
+  const SERVINGS_KEY = "cookalong.servings.v1";
 
   /** Escape untrusted text before it is interpolated into innerHTML. */
   function esc(value) {
@@ -98,16 +100,15 @@
     viewHome.classList.add("hidden");
     viewRecipe.classList.remove("hidden");
     $("recipe-title").textContent = currentRecipe.name;
-    const n = currentRecipe.nutrition;
-    $("recipe-meta").textContent = `${currentRecipe.prepTimeMinutes} min · serves ${currentRecipe.serves}` +
-      (n ? ` · 🔥 ${n.kcal} kcal · P ${n.protein}g / C ${n.carbs}g / F ${n.fat}g per serving` : "");
+    renderRecipeMeta();
+    renderServings();
     renderStep(); renderProgress(); renderSwaps(); renderIngredients();
     renderRecipeAllergens(); renderTimer();
     window.scrollTo(0, 0);
     returnFocusId = id;
     focusEl(defaultFocus());
     acquireWakeLock();   // nobody wants the TV to sleep mid-recipe
-    speak(`Starting ${currentRecipe.name}. ${displaySteps()[currentStep]}`, true);
+    speak(`Starting ${currentRecipe.name}. ${scaledSteps()[currentStep]}`, true);
   }
 
   /* ---------------- Allergens: the profile the engine already understood ---- */
@@ -229,7 +230,7 @@
    */
   function saveProgress() {
     if (!P || !currentRecipe) return;
-    const total = displaySteps().length;
+    const total = scaledSteps().length;
     if (total > 1 && currentStep >= total - 1) { clearProgress(); return; }
 
     const snapshot = P.serialize({
@@ -297,13 +298,151 @@
     return { kind: "plain", label: "" };
   }
 
+  /* ---------------- Scaling a recipe to the pot in front of you ------------- */
+
+  const SERV = window.CookalongServings || null;
+
+  function baseServings() {
+    return (currentRecipe && currentRecipe.serves) || 1;
+  }
+
+  /** How many this dish is being cooked for right now. */
+  function effectiveServings() {
+    if (!SERV) return baseServings();
+    return SERV.clampServings(wantedServings || baseServings());
+  }
+
+  function scaleFactor() {
+    return SERV ? SERV.factorFor(baseServings(), effectiveServings()) : 1;
+  }
+
+  /**
+   * The ingredient list as it reads at this yield. Scaling changes quantities
+   * and nothing else — the canonical ids that matching and swaps key off are
+   * untouched, so the allergen and pantry logic keeps seeing the same recipe.
+   */
+  function scaledIngredients() {
+    const ings = (currentRecipe && currentRecipe.ingredients) || [];
+    if (!SERV) return ings;
+    return SERV.scaleIngredients(ings, scaleFactor());
+  }
+
+  /**
+   * The steps with swaps applied, then the amounts scaled.
+   *
+   * Swaps first: a swap rewrites ingredient names inside the sentence, and the
+   * scaler matches on those same names. Cooking times never scale, which the
+   * engine enforces and its tests hold it to across every recipe.
+   */
+  function scaledSteps() {
+    const steps = displaySteps();
+    const factor = scaleFactor();
+    if (!SERV || factor === 1) return steps;
+    const heads = SERV.ingredientHeads((currentRecipe && currentRecipe.ingredients) || []);
+    return steps.map(step => SERV.scaleStepText(step, factor, heads));
+  }
+
+  function saveServings() {
+    try {
+      if (wantedServings) localStorage.setItem(SERVINGS_KEY, JSON.stringify({ v: 1, want: wantedServings }));
+      else localStorage.removeItem(SERVINGS_KEY);
+    } catch (e) { /* private mode — the choice still applies for this session */ }
+  }
+
+  function restoreServings() {
+    let snap = null;
+    try { snap = JSON.parse(localStorage.getItem(SERVINGS_KEY) || "null"); } catch (e) { snap = null; }
+    if (!snap || snap.v !== 1) return null;
+    const want = Number(snap.want);
+    return Number.isFinite(want) && want > 0 ? want : null;
+  }
+
+  /**
+   * The header line. Once the yield moves, the honest figure to quote is the
+   * total for the whole dish — "550 kcal per serving" is not what is in the pan.
+   */
+  function renderRecipeMeta() {
+    if (!currentRecipe) return;
+    const serves = effectiveServings();
+    const base = baseServings();
+    const scaled = serves !== base;
+    const n = currentRecipe.nutrition || null;
+
+    let text = `${currentRecipe.prepTimeMinutes} min · serves ${serves}`;
+    if (scaled) text += ` (scaled from ${base})`;
+
+    const totals = n && SERV ? SERV.totalNutrition(n, scaled ? serves : 1) : n;
+    if (totals) {
+      const macros = [["protein", "P"], ["carbs", "C"], ["fat", "F"]]
+        .filter(([key]) => Number.isFinite(totals[key]))
+        .map(([key, letter]) => `${letter} ${totals[key]}g`);
+      const bits = [];
+      if (Number.isFinite(totals.kcal)) bits.push(`🔥 ${totals.kcal} kcal`);
+      if (macros.length) bits.push(macros.join(" / "));
+      if (bits.length) text += ` · ${bits.join(" · ")} ${scaled ? "in total" : "per serving"}`;
+    }
+
+    $("recipe-meta").textContent = text;
+  }
+
+  function renderServings() {
+    const bar = $("servings-bar");
+    if (!bar) return;
+    if (!currentRecipe || !SERV) { bar.classList.add("hidden"); return; }
+    bar.classList.remove("hidden");
+
+    const serves = effectiveServings();
+    const base = baseServings();
+    $("servings-value").textContent = String(serves);
+    const minus = $("btn-servings-minus");
+    const plus = $("btn-servings-plus");
+    if (minus) minus.disabled = serves <= SERV.MIN_SERVINGS;
+    if (plus) plus.disabled = serves >= SERV.MAX_SERVINGS;
+
+    const note = $("servings-note");
+    if (!note) return;
+    if (serves === base) {
+      note.textContent = "as written";
+      note.classList.remove("scaled");
+    } else {
+      const factor = Math.round(SERV.factorFor(base, serves) * 100) / 100;
+      note.textContent = `×${factor} from ${base} · amounts scaled, cooking times unchanged`;
+      note.classList.add("scaled");
+    }
+  }
+
+  /**
+   * Redraw the scaled parts without re-announcing the recipe. Walking the
+   * servings up three notches should not read the step aloud three times.
+   */
+  function renderScaled() {
+    renderServings();
+    renderRecipeMeta();
+    renderIngredients();
+    if (!currentRecipe) return;
+    $("step-text").textContent = scaledSteps()[currentStep];
+    renderStepTimerHint();
+    renderProgress();
+  }
+
+  function changeServings(delta) {
+    if (!currentRecipe || !SERV) return;
+    const from = effectiveServings();
+    const next = SERV.clampServings(from + delta);
+    if (next === from) return;
+    wantedServings = next;
+    saveServings();
+    renderScaled();
+    showToast(`Scaled for ${next} — amounts changed, times did not`, 2600);
+  }
+
   function renderIngredients() {
     const list = $("ingredients-list");
     if (!list) return;
     const summary = $("ingredients-summary");
     if (!currentRecipe) { list.innerHTML = ""; if (summary) summary.textContent = ""; return; }
 
-    const ings = currentRecipe.ingredients || [];
+    const ings = scaledIngredients();
     list.innerHTML = "";
     let ready = 0;
     let swapped = 0;
@@ -340,7 +479,8 @@
       if (swapped) bits.push(`${swapped} swapped`);
       if (swap) bits.push(`${swap} swappable`);
       if (miss) bits.push(`${miss} to buy`);
-      summary.textContent = `${currentRecipe.serves} serving${currentRecipe.serves === 1 ? "" : "s"} · ${bits.join(" · ")}`;
+      const serves = effectiveServings();
+      summary.textContent = `${serves} serving${serves === 1 ? "" : "s"} · ${bits.join(" · ")}`;
     }
   }
 
@@ -362,7 +502,7 @@
 
   function renderStep() {
     if (!currentRecipe) return;
-    const steps = displaySteps();
+    const steps = scaledSteps();
     const total = steps.length;
     $("step-label").textContent = `Step ${currentStep + 1} of ${total}`;
     $("step-text").textContent = steps[currentStep];
@@ -376,7 +516,7 @@
   function renderProgress() {
     const box = $("progress");
     if (!currentRecipe) { box.innerHTML = ""; return; }
-    const total = displaySteps().length;
+    const total = scaledSteps().length;
     box.innerHTML = Array.from({ length: total }, (_, i) => `<span class="dot ${i <= currentStep ? "done" : ""}"></span>`).join("");
   }
 
@@ -391,7 +531,7 @@
    */
   function stepSeconds() {
     if (!currentRecipe || !T || !T.stepDurationSeconds) return null;
-    const steps = displaySteps();
+    const steps = scaledSteps();
     return T.stepDurationSeconds(steps[currentStep] || "");
   }
 
@@ -886,15 +1026,15 @@
     }
     if (t.includes("next")) {
       if (currentRecipe) {
-        if (currentStep < displaySteps().length - 1) { currentStep += 1; renderStep(); speak(`Step ${currentStep + 1}. ${displaySteps()[currentStep]}`); return; }
+        if (currentStep < displaySteps().length - 1) { currentStep += 1; renderStep(); speak(`Step ${currentStep + 1}. ${scaledSteps()[currentStep]}`); return; }
         speak(`That was the last step. Enjoy your ${currentRecipe.name}!`); return;
       }
     }
     if (t.includes("previous") || t.includes("back")) {
-      if (currentRecipe && currentStep > 0) { currentStep -= 1; renderStep(); speak(`Step ${currentStep + 1}. ${displaySteps()[currentStep]}`); return; }
+      if (currentRecipe && currentStep > 0) { currentStep -= 1; renderStep(); speak(`Step ${currentStep + 1}. ${scaledSteps()[currentStep]}`); return; }
     }
-    if (t.includes("repeat") || t.includes("say that again")) { if (currentRecipe) { speak(displaySteps()[currentStep]); setVoiceStatus("Repeating step"); return; } }
-    if (t.includes("read") || t.includes("speak")) { if (currentRecipe) { speak(displaySteps()[currentStep]); return; } }
+    if (t.includes("repeat") || t.includes("say that again")) { if (currentRecipe) { speak(scaledSteps()[currentStep]); setVoiceStatus("Repeating step"); return; } }
+    if (t.includes("read") || t.includes("speak")) { if (currentRecipe) { speak(scaledSteps()[currentStep]); return; } }
     if (t.includes("timer")) {
       if (t.includes("set")) {
         $("btn-timer").click();
@@ -1374,7 +1514,7 @@
     focusEl(defaultFocus());
   });
   $("btn-prev").addEventListener("click", () => { if (currentStep > 0) { currentStep -= 1; renderStep(); } });
-  $("btn-next").addEventListener("click", () => { if (currentStep < displaySteps().length - 1) { currentStep += 1; renderStep(); } });
+  $("btn-next").addEventListener("click", () => { if (currentStep < scaledSteps().length - 1) { currentStep += 1; renderStep(); } });
   $("btn-timer").addEventListener("click", () => {
     // don't clobber a timer that is already counting
     if (!timer || timer.state === "done") setTimerSeconds(suggestedTimerSeconds());
@@ -1396,7 +1536,9 @@
     focusEl(target);
     $("timer-display").scrollIntoView({ block: "center", behavior: "smooth" });
   });
-  $("btn-speak").addEventListener("click", () => { if (currentRecipe) speak(displaySteps()[currentStep]); });
+  $("btn-speak").addEventListener("click", () => { if (currentRecipe) speak(scaledSteps()[currentStep]); });
+  $("btn-servings-minus").addEventListener("click", () => changeServings(-1));
+  $("btn-servings-plus").addEventListener("click", () => changeServings(1));
   $("btn-voice").addEventListener("click", toggleVoice);
   $("btn-mute").addEventListener("click", toggleMute);
   $("btn-selfcheck").addEventListener("click", openSelfCheck);
@@ -1474,6 +1616,9 @@
     // would show recipes the cook has already asked us to hide.
     restoreAllergens();
     renderAllergenChips();
+    // How many you are cooking for is a property of the kitchen, not of one
+    // recipe, so it is restored once and then follows you from dish to dish.
+    wantedServings = restoreServings();
 
     renderGrid();
     renderKitchenChips();

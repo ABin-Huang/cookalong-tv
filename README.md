@@ -43,6 +43,14 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
 - **Picks up where you left off** — the step you reached and the swaps you
   applied survive a reload, and the home screen offers to resume them next to
   the timer that is still counting.
+- **Cooks for the number you actually have** — set the yield and the whole
+  recipe is rewritten for it: quantities scale, countable nouns agree ("1 bell
+  pepper" becomes "2 bell peppers", never "2 bell pepper"), fractions stay real
+  ("1/3 cup" doubles to "2/3 cup", "1/4 tsp" halves to "1/8 tsp"), and
+  uncountables are left alone ("300g rice" never becomes "rices"). Cooking times
+  never move: 18 minutes is 18 minutes whether you are feeding two or eight. The
+  header switches from per-serving to in-total figures so the number matches what
+  is in the pan, and the choice follows you from recipe to recipe.
 - **Pantry memory** — mark ingredients as used; the kitchen persists locally
   and future matches exclude them.
 - **10 structured recipes** (up from 4), each with role-weighted ingredients,
@@ -75,8 +83,9 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
 | `src/timer.js` | Smart timer engine (natural-language durations, drift-free timer, step-linked durations, persistence snapshots) |
 | `src/capabilities.js` | Device capability detection: can this device speak, listen, hold a wake lock, persist? (UMD) |
 | `src/progress.js` | Cooking-progress snapshots so a reload does not lose your place (UMD) |
+| `src/servings.js` | Serving scaling: amount arithmetic plus the noun agreement that makes a scaled recipe read as written (UMD) |
 | `scripts/` | `build-web.js` syncs `src/` into `public/`; `serve.js` is the dev server |
-| `test/` | Unit tests for the recipe, ingredient, timer, capability & progress engines, plus two contract tests |
+| `test/` | Unit tests for the recipe, ingredient, timer, capability, progress & servings engines, plus two contract tests |
 
 ## Quick start (web app)
 
@@ -113,7 +122,7 @@ npm run check:web    # verify they match src/ (also runs before npm test and in 
 
 ```bash
 npm install --prefix skill   # once: the skill integration tests need ask-sdk-core
-npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 124 tests
+npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 167 tests
 ```
 
 Two of those tests exist to catch drift rather than logic, because both places
@@ -125,6 +134,12 @@ have already been burned by it once:
   declared in `index.html`, that the page loads every engine the script
   consumes, that the service worker pre-caches them, and that the capability
   guard is actually present rather than the bare API check it replaced.
+
+`test/servings.test.js` is the one to read if you want to know how far the
+scaling is trusted: rather than spot-checking strings, it runs **every step of
+every recipe** through the scaler at ×0.5, ×2 and ×3 and fails if any cooking
+time moves, if any amount that should have scaled did not, or if a scaled line
+ever contains `NaN`, `undefined` or a zero measure.
 
 ## What a Fire TV actually does
 
@@ -202,14 +217,19 @@ unnoticed.
 5. Walk to the step that says "cover and cook on low for 18 minutes" — the ⏱
    button now offers 18:00 because the timer read the step. Start it: it keeps
    counting while you browse back to the recipe list.
-6. Reload the page. The timer is still counting *and* the home screen offers
+6. Press ＋ on **Cooking for** until it reads 6 — the whole recipe rewrites
+   itself for the bigger pot: "1 onion" becomes "3 onions", "250g rice" becomes
+   "750g rice", and the step prose scales in place. Point out what does *not*
+   move: "stirring often, for about 18 minutes" is still 18 minutes, and the
+   header now quotes in-total calories because that is what is in the pan.
+7. Reload the page. The timer is still counting *and* the home screen offers
    "You were on step 6 of 7" → **Resume cooking** puts you back on that step
    with the swap still applied.
-7. Open **Device check** → the probes for this device, and **Copy report** for
+8. Open **Device check** → the probes for this device, and **Copy report** for
    a bug report anyone can paste.
-8. Drive the whole thing with the remote: arrows move, OK selects, Back
+9. Drive the whole thing with the remote: arrows move, OK selects, Back
    returns. Turn the network off and reload — it still opens.
-9. Close on "hands never touched the screen".
+10. Close on "hands never touched the screen".
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design and
 [docs/DEV_SETUP.md](docs/DEV_SETUP.md) for the development environment.

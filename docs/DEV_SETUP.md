@@ -52,8 +52,9 @@ required).
 ## Editing the shared engines
 
 `public/ingredients-engine.js`, `public/timer-engine.js`,
-`public/capabilities-engine.js`, `public/progress-engine.js` and
-`public/recipes-data.js` are **generated** from `src/`. Edit `src/` only, then:
+`public/capabilities-engine.js`, `public/progress-engine.js`,
+`public/servings-engine.js` and `public/recipes-data.js` are **generated** from
+`src/`. Edit `src/` only, then:
 
 ```bash
 npm run build:web    # write the public/ artifacts
@@ -82,8 +83,9 @@ npm test
 ```
 
 Covers the recipe engine (listing, filtering, step formatting), the ingredient
-intelligence engine (matching, substitutions, pantry) and the timer engine
-(duration parsing, drift-free ticking, persistence round-trips).
+intelligence engine (matching, substitutions, pantry), the timer engine
+(duration parsing, drift-free ticking, persistence round-trips), the capability
+probes and the serving scaler.
 
 ## Service worker
 

@@ -83,6 +83,13 @@
     <h2 id="recipe-title"></h2>
     <p id="recipe-meta" class="meta"></p>
     <p id="recipe-allergen" class="recipe-allergen hidden" aria-live="polite"></p>
+    <div id="servings-bar" class="servings-bar" role="group" aria-label="How many people you are cooking for">
+      <span class="servings-label">Cooking for</span>
+      <button id="btn-servings-minus" class="btn small servings-step" aria-label="Cook for fewer people">−</button>
+      <span id="servings-value" class="servings-value" aria-live="polite">2</span>
+      <button id="btn-servings-plus" class="btn small servings-step" aria-label="Cook for more people">＋</button>
+      <span id="servings-note" class="servings-note" aria-live="polite"></span>
+    </div>
     <section id="ingredients-panel" class="ingredients-panel" aria-label="What you need">
       <div class="ingredients-head">
         <h4 class="ingredients-title">🧺 What you need</h4>
@@ -149,6 +156,7 @@
   <script src="timer-engine.js"></script>
   <script src="capabilities-engine.js"></script>
   <script src="progress-engine.js"></script>
+  <script src="servings-engine.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
