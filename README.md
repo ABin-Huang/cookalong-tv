@@ -95,6 +95,25 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   total. Every line also names the swap you already own ("or use your olive
   oil"), so a missing ingredient can be skipped rather than bought. The list is
   global state like the timers, and persists across reloads.
+- **One decision, not a list of options** — "what can I cook?" is not a browsing
+  question, and a grid of twenty-something cards makes the cook do the deciding.
+  The kitchen panel now answers with a single dish — *Tonight, cook this* — and
+  folds everything else behind one line: **Also ready right now**, and **Needs
+  shopping**. The answer is the head of the same ranking the list is drawn from,
+  so the banner and the list cannot disagree, and it is only ever a dish with no
+  hard miss — an empty kitchen is told the truth rather than handed a 41%
+  "best match" needing three trips to the shop. **Another one** walks down that
+  ranking instead of re-rolling, so the runner-up is the same runner-up every
+  time, and the choice sticks across a reload. By voice, "what can I make
+  without going shopping" answers the zero-shopping question directly — the
+  strict reading (nothing missing at all, not even something swappable) when it
+  can, and "nothing is fully stocked, but X is one swap away" when it cannot,
+  because a swap is still a decision and usually a purchase. Two layout failures
+  are worth recording: the decision first rendered *below* the recipe grid —
+  ~1200px down a 1080p screen and entirely off a 720p one — so the markup order
+  is now asserted by a test; and the aids that asked the question (the hint, the
+  quick chips) hide once there is an answer, which is what lifted the decision
+  onto the first screen of a 1280×720 Fire TV.
 - **Works offline** — a service worker pre-caches the app shell, so the kitchen
   UI still opens with no network.
 - **Honest scoring** — every match can explain itself: which ingredients
@@ -202,7 +221,7 @@ the parts a person would actually notice are checked in a real browser, on deman
 
 ```bash
 npm start                 # terminal 1 — serves public/ on :8080
-npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 23 checks
+npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 33 checks
 ```
 
 It presses the real buttons and reads the real DOM: the panel lists and ticks, the
@@ -277,9 +296,14 @@ unnoticed.
 
 ### 3-minute demo script
 
-1. "I have mushrooms, rice, onion and garlic" → best match at 96%, every
-   missing item flagged as swappable. Hit **Why 96%?** to show the weighted
-   breakdown behind the number.
+1. Type "mushrooms, rice, onion and garlic" (or say it). The panel answers with
+   **one dish**, not a grid — *Tonight, cook this*, what it would cost you ("1 to
+   swap"), and the reason underneath. Everything else folds into a single line
+   each: **Also ready right now**, **Needs shopping**. Hit **Another one** and
+   the runner-up takes its place — the same runner-up every time. Then ask
+   **"what can I make without going shopping"**: it answers honestly that nothing
+   is fully stocked with this kitchen, and names the dish that is one swap away.
+   Hit **Why 96%?** on any card to show the weighted breakdown behind the score.
 2. Tap **dairy** in the allergy row → four recipes leave the grid and the line
    underneath says why. Open the risotto: the banner says it contains dairy and
    points at the swap panel. Clear the allergy.

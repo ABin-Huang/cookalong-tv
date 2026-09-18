@@ -91,7 +91,11 @@ claim the code can back up without a device-linking backend.
   allergen-aware profiles (`COMMON_ALLERGENS`, `recipeAllergens`,
   `recipeMatchesProfile`) and pantry memory. Substitution selection is
   fail-closed: an option that is not *proven* compatible with the cook's diets
-  and allergens is never offered.
+  and allergens is never offered. It also owns the two facts that turn a ranking
+  into an answer — `isReadyNow` / `readyNow` (the strict reading: nothing missing
+  at all) and `suggest` (the cookable head of the ranking) — plus the single
+  `SUGGEST_FLOOR` the two surfaces share. See
+  [One decision, not a ranked list](#one-decision-not-a-ranked-list).
 - `timer.js` — `parseDuration("1 hour 30 minutes") -> 5400`, a stateful `Timer`
   class (start / pause / resume / stop, `format()` MM:SS, `speak()`), and
   `stepDurationSeconds(stepText)` which reads a step's own cooking time so the
@@ -269,6 +273,58 @@ one the spoken timer has. When the skill is asked what is missing and has not be
 told what is in the kitchen, it asks instead of assuming: a list built on an
 invented kitchen sends someone out to buy what they already own.
 
+## One decision, not a ranked list
+
+The matcher has always returned a good ranking, and a ranking is not an answer.
+Twenty-something scored cards hand the deciding back to the cook, which is the
+one thing they asked the app to do. So the kitchen panel answers with a single
+dish — *Tonight, cook this* — and folds everything else away. The interesting
+part is not the card; it is the three rules that keep the card honest.
+
+**A decision is a dish you can cook.** The first version promoted the top-ranked
+match, which meant an empty kitchen got an announcement: *Tonight, cook Lemon
+Garlic Shrimp — 41%*, needing three trips to the shop. A decision is therefore
+`missingHard.length === 0` **and** `score >= SUGGEST_FLOOR`, and the test sweeps
+real kitchens to hold it to that. Where the ranking can be generous, the
+decision cannot, which is also why `SUGGEST_FLOOR` lives in the engine: the web
+app used to carry 25 and the skill 40, and two surfaces disagreeing about whether
+there is an answer at all is worse than either number being wrong.
+
+**It is the head of the ranking, never a second opinion.** `suggest(matches)`
+returns `matches` filtered, not re-scored, so the dish the banner names is by
+construction the dish the list beneath it contains. Everything on both surfaces
+reads from that one object — the web banner, its folds, the skill's spoken lead
+and its APL list. A second scoring function is how the TV and the Echo end up
+disagreeing about dinner, and there is no test that can catch that after the
+fact. `'Another one'` walks *down* the same ranking rather than re-rolling, so
+the runner-up is stable, and the avoided ids persist per kitchen signature — the
+dish you moved past does not come back after a reload.
+
+**Zero shopping is a strict claim, so it gets its own word.** `isReadyNow` means
+nothing is missing at all — not even something with a substitution. That reading
+is deliberately narrow, because a swap is still a decision to make and usually a
+thing to buy, so a swap-only dish is described as a swap and never as *ready*.
+In a ten-recipe corpus the strict set is empty for most real kitchens, which is
+the honest answer to "what can I make without going shopping" and is why the
+skill says *nothing is fully stocked, but X is one swap away* instead of quietly
+promoting X. `isReadyNow` is also fail-closed: absent bookkeeping is not "you
+have everything", because that is the one claim that must never be made by
+default.
+
+Two failures here were layout, not logic, and both are now asserted. The kitchen
+section originally sat *below* the recipe grid, so the decision rendered roughly
+1200px down a 1080p page — you scrolled past ten recipes to read the single line
+the feature exists to say. Moving it up after the diet and allergy chips (which
+scope the decision, so they are read first) fixed the order, and a markup-order
+test keeps it fixed. The second was smaller: on a 1280×720 Fire TV viewport the
+preamble of hint, chips and pantry ran to ~705px, so the card began below the
+fold and a 720p cook saw none of it. The hint and the quick chips are aids for
+*asking* the question, so once there is an answer they hide — decided by whether
+the input still matches the kitchen last answered, not by focus, so pressing
+Enter to re-ask the same kitchen does not push the answer back off the screen.
+That is worth ~145px, enough to put the ribbon, the dish and the cost badge on
+the first screen of a 720p TV.
+
 ## AWS deployment (hackathon target)
 
 - Alexa skill backend: **AWS Lambda** (Node.js 18) + ASK SDK; role with
@@ -351,8 +407,9 @@ Two contract tests exist because the same class of bug shipped twice:
   `index.html`, a load order that puts `plan-engine.js` before the
   `timer-engine.js` it resolves at load time (or `shopping-engine.js` before the
   `servings-engine.js` and `ingredients-engine.js` it does the same with), an
-  engine missing from the service-worker shell, or a capability guard regressing
-  to a bare API check all fail here rather than at runtime. No unit test loads
+  engine missing from the service-worker shell, a capability guard regressing
+  to a bare API check, or the kitchen section drifting back below the recipe grid
+  all fail here rather than at runtime. No unit test loads
   `app.js`, which is exactly how a redeclared identifier broke the whole web app
   while 71 tests stayed green.
 
