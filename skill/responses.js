@@ -21,6 +21,14 @@ const {
 } = require("../src/ingredients");
 const { Timer } = require("../src/timer");
 const { summary: summarizePlan } = require("../src/plan");
+const {
+  itemsToBuy,
+  manualItem,
+  addItems,
+  clearAll: clearShopping,
+  summary: summarizeShopping,
+  speak: speakShopping
+} = require("../src/shopping");
 
 const APL = {
   matchResults: require("./apl/match-results.json"),
@@ -431,6 +439,121 @@ function buildCookPlan(session) {
   };
 }
 
+/* ---------------------------- shopping list ----------------------------- */
+/**
+ * What to buy, which is a different sum from what the recipe uses.
+ *
+ * The kitchen half of this skill answers "what can I cook?" and the swap half
+ * answers "what about the one thing I am missing?". Neither gets anyone to the
+ * shop, so this closes the loop with the same engine the Fire TV app draws its
+ * list from — which is the point: the list you hear and the list you see on the
+ * screen cannot disagree about a single amount.
+ *
+ * Voice earns its place here rather than duplicating the screen, because the
+ * moment this list matters is the moment the cook is standing in a shop and not
+ * in front of the TV.
+ *
+ * The list lives in session attributes, which is an honest limit worth stating:
+ * it lasts the conversation. Carrying it past the session needs the persistence
+ * adapter, exactly as the timer needs the Timers API to ring — the session-scoped
+ * version is what lets the arithmetic be right today instead of papered over.
+ */
+function buildShoppingList(session) {
+  const list = Array.isArray(session.shoppingList) ? session.shoppingList : [];
+  if (!list.length) {
+    return {
+      speech: "<speak>Your shopping list is empty. With a recipe open, say add what's missing, " +
+        "or name something: add parmesan to my shopping list.</speak>",
+      reprompt: "Say add what's missing, or name an ingredient."
+    };
+  }
+  const totals = summarizeShopping(list);
+  const ticked = totals.bought
+    ? ` ${totals.bought} of them ${totals.bought === 1 ? "is" : "are"} already ticked off on screen.`
+    : "";
+  const skippable = totals.skipable
+    ? ` For ${totals.skipable} of them you already own a swap — the screen shows which.`
+    : "";
+  return {
+    speech: `<speak>${speakShopping(list)}${ticked}${skippable}</speak>`,
+    reprompt: "Say clear my shopping list to start a new one."
+  };
+}
+
+function buildAddToShoppingList(rawIngredient, session) {
+  const list = Array.isArray(session.shoppingList) ? session.shoppingList : [];
+
+  // Naming something out loud adds a want, not a measurement: there is no recipe
+  // behind it to ask how much.
+  const named = String(rawIngredient || "").trim();
+  if (named) {
+    const item = manualItem(named);
+    if (!item) {
+      return { speech: "<speak>I didn't catch what to add. Try, add garlic to my shopping list.</speak>" };
+    }
+    const next = addItems(list, [item]);
+    session.shoppingList = next;
+    return {
+      speech: `<speak>Added ${item.name} to your shopping list. That is ${summarizeShopping(next).total} ` +
+        `${summarizeShopping(next).total === 1 ? "item" : "items"} on it now.</speak>`,
+      reprompt: "Say read my shopping list to hear it."
+    };
+  }
+
+  const recipe = session.recipeId ? getRecipe(session.recipeId) : null;
+  if (!recipe) {
+    return {
+      speech: "<speak>Which recipe? Open one and ask again, or name what you need: " +
+        "add garlic to my shopping list.</speak>",
+      reprompt: "Name an ingredient to add."
+    };
+  }
+
+  const haves = Array.isArray(session.lastHaves) ? session.lastHaves : [];
+  if (!haves.length) {
+    // Guessing here would be the one thing this skill never does: a list built on
+    // an assumed kitchen would send someone out to buy what they already own.
+    return {
+      speech: `<speak>I don't know what is in your kitchen yet. Tell me what you have — for example, ` +
+        `I have chicken and rice — and then ask what's missing for ${recipe.name}. ` +
+        "Or just name what you need: add parmesan to my shopping list.</speak>",
+      reprompt: "What is in your kitchen?"
+    };
+  }
+
+  const items = itemsToBuy(recipe, {
+    servings: recipe.serves,
+    have: haves,
+    profile: profileOf(session)
+  }).items;
+  if (!items.length) {
+    return {
+      speech: `<speak>You already have everything ${recipe.name} needs. There is nothing to add.</speak>`,
+      reprompt: "Say what else is in your kitchen."
+    };
+  }
+
+  const next = addItems(list, items);
+  session.shoppingList = next;
+  // speakShopping opens with the count itself, so saying it here too made the
+  // skill repeat itself: "You have 2 to buy. 2 things to buy: …". One count.
+  return {
+    speech: `<speak>Added ${items.length} ${items.length === 1 ? "item" : "items"} for ${recipe.name}. ` +
+      `${speakShopping(next)}</speak>`,
+    reprompt: "Say read my shopping list any time, or start cooking."
+  };
+}
+
+function buildClearShoppingList(session) {
+  const before = Array.isArray(session.shoppingList) ? session.shoppingList.length : 0;
+  session.shoppingList = clearShopping();
+  return {
+    speech: before
+      ? `<speak>Emptied your shopping list — ${before} ${before === 1 ? "item" : "items"} removed.</speak>`
+      : "<speak>Your shopping list is already empty.</speak>"
+  };
+}
+
 /* ------------------------------- profile -------------------------------- */
 
 function buildSetProfile(dietSlot, allergenSlot, session, removing = false) {
@@ -468,11 +591,13 @@ function buildSetProfile(dietSlot, allergenSlot, session, removing = false) {
 const HELP_SPEECH =
   "<speak>CookAlong TV helps you cook hands-free. Say I have chicken and rice to find a match, " +
   "cook tomato basil pasta to start, I am vegan to set your diet, I do not have parmesan for a smart swap, " +
-  "next step to continue, which step takes longest to find the long wait, or set a timer for 5 minutes.</speak>";
+  "next step to continue, which step takes longest to find the long wait, add what's missing to list what to buy, " +
+  "or set a timer for 5 minutes.</speak>";
 
 const FALLBACK_SPEECH =
   "<speak>I didn't catch that. Try I have chicken and rice, cook tomato basil pasta, I am vegan, " +
-  "I do not have parmesan, next step, which step takes longest, or set a timer for 5 minutes.</speak>";
+  "I do not have parmesan, next step, which step takes longest, add what's missing, " +
+  "or set a timer for 5 minutes.</speak>";
 
 module.exports = {
   APL,
@@ -486,6 +611,9 @@ module.exports = {
   buildPreviousStep,
   buildRepeatStep,
   buildCookPlan,
+  buildShoppingList,
+  buildAddToShoppingList,
+  buildClearShoppingList,
   buildSetProfile,
   rewrittenSteps,
   matchDatasource,

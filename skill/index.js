@@ -95,6 +95,17 @@ const RepeatStepIntentHandler = intentHandler("RepeatStepIntent", handlerInput =
 const CookPlanIntentHandler = intentHandler("CookPlanIntent", handlerInput =>
   respond(handlerInput, R.buildCookPlan(state(handlerInput))));
 
+/* ----------------------------- shopping list ---------------------------- */
+
+const ShoppingListIntentHandler = intentHandler("ShoppingListIntent", handlerInput =>
+  respond(handlerInput, R.buildShoppingList(state(handlerInput))));
+
+const AddToShoppingListIntentHandler = intentHandler("AddToShoppingListIntent", handlerInput =>
+  respond(handlerInput, R.buildAddToShoppingList(slot(handlerInput, "ingredient"), state(handlerInput))));
+
+const ClearShoppingListIntentHandler = intentHandler("ClearShoppingListIntent", handlerInput =>
+  respond(handlerInput, R.buildClearShoppingList(state(handlerInput))));
+
 /* ----------------------------- smart match ------------------------------ */
 
 const WhatDoIHaveIntentHandler = intentHandler("WhatDoIHaveIntent", handlerInput =>
@@ -255,6 +266,9 @@ exports.handler = Alexa.SkillBuilders.custom()
     PreviousStepIntentHandler,
     RepeatStepIntentHandler,
     CookPlanIntentHandler,
+    ShoppingListIntentHandler,
+    AddToShoppingListIntentHandler,
+    ClearShoppingListIntentHandler,
     WhatDoIHaveIntentHandler,
     NextMatchIntentHandler,
     SubstituteIntentHandler,

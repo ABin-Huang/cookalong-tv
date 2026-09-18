@@ -162,6 +162,93 @@ test("buildCookPlan agrees with SetTimerIntent about what a step is asking for",
     "the reprompt should offer the timer the SetTimerIntent would build");
 });
 
+/* ---------------------------- shopping list ----------------------------- */
+
+test("an empty shopping list explains how to fill it rather than reading nothing", () => {
+  const out = R.buildShoppingList(freshState());
+  assert.ok(out.speech.startsWith("<speak>"));
+  assert.ok(/empty/i.test(out.speech));
+  assert.ok(/add what's missing/i.test(out.speech));
+  assert.ok(out.reprompt);
+});
+
+test("naming an ingredient adds a want, with no amount invented for it", () => {
+  const s = freshState();
+  const out = R.buildAddToShoppingList("parmesan", s);
+  assert.strictEqual(s.shoppingList.length, 1);
+  assert.strictEqual(s.shoppingList[0].canonical, "cheese",
+    "resolved against the same alias table the kitchen panel uses");
+  assert.strictEqual(s.shoppingList[0].asNeeded, true, "nobody said how much");
+  assert.ok(/added parmesan/i.test(out.speech));
+  assert.ok(/1 item/i.test(out.speech));
+});
+
+test("the skill refuses to guess what is in the kitchen", () => {
+  // Building a list from an assumed kitchen is the one thing this skill never
+  // does, because the failure mode is sending someone out to buy what they
+  // already have. It asks instead.
+  const s = freshState({ recipeId: "tomato-basil-pasta" });
+  const out = R.buildAddToShoppingList("", s);
+  assert.strictEqual(s.shoppingList, undefined, "nothing may be added on a guess");
+  assert.ok(/don't know what is in your kitchen/i.test(out.speech));
+  assert.ok(/i have chicken and rice/i.test(out.speech), "and it says how to fix that");
+  assert.ok(out.reprompt);
+});
+
+test("with a kitchen and a recipe, only what is missing is added", () => {
+  const s = freshState({ recipeId: "tomato-basil-pasta", lastHaves: ["pasta", "garlic"] });
+  const out = R.buildAddToShoppingList("", s);
+  assert.deepStrictEqual(s.shoppingList.map(i => i.canonical).sort(), ["basil", "tomato"],
+    "the pasta and the garlic are already owned");
+  assert.ok(/added 2 items/i.test(out.speech));
+  assert.ok(/crushed tomatoes/i.test(out.speech), "and it names what it added");
+});
+
+test("the spoken list and the drawn list cannot disagree about an amount", () => {
+  // Both surfaces call the same engine with the same inputs. This is the test
+  // that would fail if either side ever grew arithmetic of its own.
+  const { itemsToBuy } = require("../src/shopping");
+  const { getRecipe } = require("../src/recipes");
+  const s = freshState({ recipeId: "garlic-chicken-rice", lastHaves: ["chicken"] });
+  R.buildAddToShoppingList("", s);
+
+  const expected = itemsToBuy(getRecipe("garlic-chicken-rice"), { servings: 3, have: ["chicken"] }).items;
+  const shape = list => list.map(i => `${i.qty} ${i.name}`).sort();
+  assert.deepStrictEqual(shape(s.shoppingList), shape(expected));
+  // The chicken is owned and the stock is not a pantry staple in this recipe, so
+  // the stock is a genuine purchase that belongs on the list.
+  assert.deepStrictEqual(shape(s.shoppingList), ["300g rice", "4 garlic cloves", "600ml chicken stock"]);
+});
+
+test("asking twice for the same dish is not doubling the shopping", () => {
+  const s = freshState({ recipeId: "garlic-chicken-rice", lastHaves: ["chicken"] });
+  R.buildAddToShoppingList("", s);
+  const once = s.shoppingList.map(i => `${i.key}=${i.qty}`).sort();
+  R.buildAddToShoppingList("", s);
+  assert.deepStrictEqual(s.shoppingList.map(i => `${i.key}=${i.qty}`).sort(), once);
+});
+
+test("clearing says whether there was anything to clear", () => {
+  const s = freshState();
+  assert.ok(/already empty/i.test(R.buildClearShoppingList(s).speech));
+
+  R.buildAddToShoppingList("garlic", s);
+  const out = R.buildClearShoppingList(s);
+  assert.deepStrictEqual(s.shoppingList, []);
+  assert.ok(/emptied/i.test(out.speech));
+  assert.ok(/1 item removed/i.test(out.speech));
+});
+
+test("a recipe with nothing missing says so instead of adding an empty list", () => {
+  const s = freshState({
+    recipeId: "vegetable-stir-fry",
+    lastHaves: ["bell-pepper", "carrot", "broccoli", "rice", "garlic"]
+  });
+  const out = R.buildAddToShoppingList("", s);
+  assert.strictEqual(s.shoppingList, undefined, "nothing to add means nothing added");
+  assert.ok(/nothing to add/i.test(out.speech));
+});
+
 /* ------------------------------- profile ------------------------------- */
 
 test("buildSetProfile stores diets/allergens and de-duplicates", () => {

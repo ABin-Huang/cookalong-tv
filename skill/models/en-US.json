@@ -134,6 +134,39 @@
           ]
         },
         {
+          "name": "ShoppingListIntent",
+          "slots": [],
+          "samples": [
+            "what do i need to buy",
+            "what do i need to buy for this",
+            "read my shopping list",
+            "whats on my shopping list",
+            "shopping list"
+          ]
+        },
+        {
+          "name": "AddToShoppingListIntent",
+          "slots": [{ "name": "ingredient", "type": "INGREDIENT" }],
+          "samples": [
+            "add whats missing",
+            "add whats missing to my shopping list",
+            "add what i need to my shopping list",
+            "add {ingredient} to my shopping list",
+            "add {ingredient} to the list",
+            "put {ingredient} on my shopping list",
+            "i need to buy {ingredient}"
+          ]
+        },
+        {
+          "name": "ClearShoppingListIntent",
+          "slots": [],
+          "samples": [
+            "clear my shopping list",
+            "empty my shopping list",
+            "start a new shopping list"
+          ]
+        },
+        {
           "name": "SetTimerIntent",
           "slots": [{ "name": "duration", "type": "AMAZON.DURATION" }],
           "samples": [
