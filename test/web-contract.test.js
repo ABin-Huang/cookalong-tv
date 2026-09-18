@@ -38,6 +38,7 @@ const ENGINE_SCRIPTS = {
   CookalongProgress: "progress-engine.js",
   CookalongServings: "servings-engine.js",
   CookalongPlan: "plan-engine.js",
+  CookalongShopping: "shopping-engine.js",
 };
 
 test("every element app.js looks up is actually declared in index.html", () => {
@@ -83,6 +84,20 @@ test("plan-engine is loaded after the engine it reads durations through", () => 
   assert.ok(planAt > timerAt, "plan-engine.js must come after timer-engine.js in index.html");
 });
 
+test("shopping-engine is loaded after both engines it resolves at load time", () => {
+  // shopping-engine is the only engine that needs two others, and it takes them
+  // as factory arguments: `factory(CookalongServings, CookalongIngredients)`.
+  // Load it before either and it is built with a missing engine — amounts stop
+  // being scaled and spoken wrong, and nothing throws. Same silent-empty failure
+  // as the plan/timer pair above, so it gets the same guard.
+  const order = ["ingredients-engine.js", "servings-engine.js", "shopping-engine.js"]
+    .map(f => ({ f, at: html.indexOf(`src="${f}"`) }));
+  order.forEach(({ f, at }) => assert.ok(at !== -1, `${f} must be loaded by index.html`));
+  assert.ok(order[1].at > order[0].at, "servings-engine.js must come after ingredients-engine.js");
+  assert.ok(order[2].at > order[0].at, "shopping-engine.js must come after ingredients-engine.js");
+  assert.ok(order[2].at > order[1].at, "shopping-engine.js must come after servings-engine.js");
+});
+
 test("the shipped engines are byte-identical to their src/ originals", () => {
   const pairs = [
     ["src/ingredients.js", "public/ingredients-engine.js"],
@@ -91,6 +106,7 @@ test("the shipped engines are byte-identical to their src/ originals", () => {
     ["src/progress.js", "public/progress-engine.js"],
     ["src/servings.js", "public/servings-engine.js"],
     ["src/plan.js", "public/plan-engine.js"],
+    ["src/shopping.js", "public/shopping-engine.js"],
   ];
   const normalize = s => s.replace(/\r\n/g, "\n");
   pairs.forEach(([from, to]) => assert.strictEqual(

@@ -1352,6 +1352,16 @@
         `Any of them can be started from the cook plan.`);
       return;
     }
+    if (/what do i need to buy|what to buy|shopping list|read (my|the) list|what'?s on my list/.test(t)) {
+      readShopping();
+      return;
+    }
+    if (/add (what'?s |the )?missing|what'?s missing|add what i need|add to (my |the )?(shopping )?list|add it to my list/.test(t)) {
+      // "Add what's missing" is the command that turns a recipe you cannot quite
+      // cook into a trip to the shop.
+      addMissingFromRecipe();
+      return;
+    }
     if (t.includes("timer")) {
       if (t.includes("set") || t.includes("add") || t.includes("start a")) {
         const secs = suggestedTimerSeconds();
@@ -1641,7 +1651,10 @@
           <p class="match-why-foot">Main ingredients weigh 3×, secondary 1×, seasonings 0.5×. Pantry staples are assumed on hand.</p>
         </div>
       </div>
-      <button class="btn primary match-cook" type="button">Cook it</button>`;
+      <div class="match-actions">
+        <button class="btn primary match-cook" type="button">Cook it</button>
+        <button class="btn match-shop" type="button">🛒 Add what's missing</button>
+      </div>`;
 
     const toggle = card.querySelector(".match-why-toggle");
     const body = card.querySelector(".match-why-body");
@@ -1652,7 +1665,14 @@
     });
 
     card.querySelector(".match-cook").addEventListener("click", () => openRecipe(r.id, m, haveSet));
-    card.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") openRecipe(r.id, m, haveSet); });
+    card.querySelector(".match-shop").addEventListener("click", () => addMissingFromMatch(m, r));
+    // The card is focusable in its own right, so a key pressed on one of its
+    // buttons bubbles up here and would open the recipe instead of doing what the
+    // button says. Only keys on the card itself may mean "start cooking".
+    card.addEventListener("keydown", e => {
+      if (e.target !== card) return;
+      if (e.key === "Enter" || e.key === " ") openRecipe(r.id, m, haveSet);
+    });
     return card;
   }
 
@@ -1769,6 +1789,252 @@
     renderStep(); renderSwaps(); renderIngredients();
     showToast("↩ Swap undone — original step text restored", 3000);
     setVoiceStatus("Swap undone");
+  }
+
+  /* ---------------- The shopping list: what to buy, not what to use ----------
+   *
+   * The kitchen panel answers "what can I cook?" and the swap panel answers "what
+   * about the one thing I am missing?". Neither gets anyone to the shop, because
+   * a recipe's ingredient list is not a shopping list. It includes the salt you
+   * already own, it is written for the recipe's own yield rather than the pot in
+   * front of you, and two dishes that both want garlic want one amount of garlic
+   * between them, not two lines.
+   *
+   * The arithmetic lives in the engine (src/shopping.js), which is where the rule
+   * that two different units are never added together is also tested. What is
+   * decided here is only what the buttons mean: which dish's needs are being
+   * added, and — the one judgement the engine cannot make for us — what "already
+   * have" means at this moment.
+   */
+  const SHOP = window.CookalongShopping || null;
+  const SHOPPING_KEY = "cookalong.shopping.v1";
+  let shoppingList = [];
+
+  /**
+   * What the cook is treated as owning right now: the pantry they have saved,
+   * plus the ingredient set of the match they came in from. The match's set is
+   * the more specific answer when there is one, and the engine adds this recipe's
+   * own pantry staples on top, which is what keeps the list agreeing with the
+   * score on the card that sent you here.
+   */
+  function haveNow() {
+    const have = new Set(pantry ? pantry.all() : []);
+    if (currentHave) currentHave.forEach(c => have.add(c));
+    return [...have];
+  }
+
+  /** How many this dish is being cooked for, whether or not it is open. */
+  function servingsFor(recipe) {
+    const base = (recipe && recipe.serves) || 1;
+    // How many you are cooking for is a property of the kitchen, not of one
+    // recipe, so the stepper's setting follows the cook from dish to dish.
+    return SERV ? SERV.clampServings(wantedServings || base) : base;
+  }
+
+  function loadShopping() {
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem(SHOPPING_KEY) || "[]"); } catch (e) { saved = []; }
+    shoppingList = Array.isArray(saved) ? saved.filter(i => i && i.key) : [];
+  }
+
+  function saveShopping() {
+    try { localStorage.setItem(SHOPPING_KEY, JSON.stringify(shoppingList)); } catch (e) { /* private mode */ }
+    renderShopping();
+  }
+
+  /** What this recipe still needs bought, for the yield on screen. */
+  function needsToBuy(recipe) {
+    if (!SHOP || !recipe) return [];
+    return SHOP.itemsToBuy(recipe, {
+      servings: servingsFor(recipe),
+      have: haveNow(),
+      profile: currentProfile(),
+    }).items;
+  }
+
+  function addNeeds(items, label) {
+    if (!SHOP) return;
+    if (!items.length) {
+      setVoiceStatus(`Nothing to buy for ${label}`);
+      showToast(`Nothing to buy for ${label} — your kitchen already covers it`, 3400);
+      return;
+    }
+    shoppingList = SHOP.addItems(shoppingList, items);
+    saveShopping();
+    const remaining = SHOP.summary(shoppingList).remaining;
+    const word = items.length === 1 ? "item" : "items";
+    setVoiceStatus(`${remaining} to buy`);
+    showToast(`🛒 Added ${items.length} ${word} for ${label} — ${remaining} to buy`, 3800);
+  }
+
+  function addMissingFromRecipe() {
+    if (!SHOP) return;
+    if (!currentRecipe) {
+      setVoiceStatus("Open a recipe and I'll list what it needs");
+      speak("Open a recipe first, then ask me to add what is missing.");
+      return;
+    }
+    addNeeds(needsToBuy(currentRecipe), currentRecipe.name);
+  }
+
+  /**
+   * From a kitchen match card. The match already worked out which of the recipe's
+   * ingredients the cook has, so the needs are exactly what the card marks as
+   * missing — no second opinion about what is in the kitchen.
+   */
+  function addMissingFromMatch(m, recipe) {
+    if (!SHOP || !recipe) return;
+    const have = [...new Set([...(m.matched || []), ...haveNow()])];
+    const items = SHOP.itemsToBuy(recipe, {
+      servings: servingsFor(recipe),
+      have,
+      profile: currentProfile(),
+    }).items;
+    addNeeds(items, recipe.name);
+  }
+
+  function shopRow(item) {
+    const row = document.createElement("li");
+    row.className = `shop-row${item.bought ? " bought" : ""}${item.asNeeded ? " asneeded" : ""}`;
+    row.dataset.key = item.key;
+
+    const tick = document.createElement("button");
+    tick.type = "button";
+    tick.className = "btn small shop-tick";
+    tick.textContent = item.bought ? "↩ Undo" : "✓ Got it";
+    tick.setAttribute("aria-label", `${item.bought ? "Un-tick" : "Tick off"} ${item.name}`);
+    tick.addEventListener("click", () => toggleShopItem(item.key));
+
+    // An amount that is not a number cannot be ticked off against a figure, so it
+    // is labelled honestly and the recipe's own words are kept beside it — "a
+    // handful" and "to taste" tell you different things about how much to buy.
+    const qty = document.createElement("span");
+    qty.className = "shop-qty";
+    qty.textContent = item.asNeeded ? "as needed" : item.qty;
+
+    const name = document.createElement("span");
+    name.className = "shop-name";
+    name.textContent = item.name;
+    if (item.asNeeded && item.qty) {
+      const words = document.createElement("span");
+      words.className = "shop-for";
+      words.textContent = ` (${item.qty})`;
+      name.appendChild(words);
+    }
+
+    row.append(tick, qty, name);
+
+    if (item.dishes > 1) {
+      const dishes = document.createElement("span");
+      dishes.className = "shop-for";
+      dishes.textContent = `${item.dishes} dishes`;
+      dishes.title = (item.forRecipeNames || []).join(", ");
+      row.appendChild(dishes);
+    }
+    if (item.skipWith) {
+      // The link back to the swap panel: you may not need to buy this at all.
+      const skip = document.createElement("span");
+      skip.className = "shop-skip";
+      skip.textContent = `or use your ${item.skipWith.name}`;
+      if (item.skipWith.note) skip.title = item.skipWith.note;
+      row.appendChild(skip);
+    }
+
+    row.addEventListener("click", e => { if (e.target !== tick) toggleShopItem(item.key); });
+    return row;
+  }
+
+  function renderShopping() {
+    const list = $("shop-list");
+    if (!list) return;
+    const emptyEl = $("shop-empty");
+    if (!SHOP) {
+      list.innerHTML = "";
+      if (emptyEl) emptyEl.textContent = "Shopping list unavailable — the engine did not load.";
+      return;
+    }
+
+    list.innerHTML = "";
+    const s = SHOP.summary(shoppingList);
+    const count = $("shop-count");
+    if (count) count.textContent = String(s.remaining);
+
+    const summaryEl = $("shop-summary");
+    if (summaryEl) {
+      const bits = [];
+      if (s.total) bits.push(`${s.remaining} to buy`, `${s.bought} already got`);
+      if (s.asNeeded) bits.push(`${s.asNeeded} as needed`);
+      if (s.skipable) bits.push(`${s.skipable} you could skip`);
+      summaryEl.textContent = bits.join(" · ");
+    }
+    if (emptyEl) emptyEl.classList.toggle("hidden", s.total > 0);
+
+    shoppingList.forEach(item => list.appendChild(shopRow(item)));
+    renderShoppingBadge();
+  }
+
+  function renderShoppingBadge() {
+    const badge = $("btn-shop-badge");
+    if (!badge) return;
+    const remaining = SHOP ? SHOP.summary(shoppingList).remaining : 0;
+    badge.classList.toggle("has-items", remaining > 0);
+    badge.title = remaining
+      ? `${remaining} thing${remaining === 1 ? "" : "s"} still to buy`
+      : "Shopping list — nothing on it yet";
+    const text = $("shop-badge-text");
+    if (text) text.textContent = remaining ? `${remaining} to buy` : "List";
+  }
+
+  function toggleShopItem(key) {
+    if (!SHOP) return;
+    const item = shoppingList.find(i => i.key === key);
+    if (!item) return;
+    shoppingList = SHOP.setBought(shoppingList, key, !item.bought);
+    saveShopping();
+    if (!item.bought) showToast(`✓ ${item.name} — got it`, 1800);
+  }
+
+  function clearShoppingBought() {
+    if (!SHOP) return;
+    const removed = SHOP.summary(shoppingList).bought;
+    if (!removed) { showToast("Nothing is ticked off yet", 2400); return; }
+    shoppingList = SHOP.clearBought(shoppingList);
+    saveShopping();
+    showToast(`🧺 Took ${removed} bought item${removed === 1 ? "" : "s"} off the list`, 3000);
+  }
+
+  function emptyShopping() {
+    if (!SHOP || !shoppingList.length) { showToast("The list is already empty", 2400); return; }
+    const gone = shoppingList.length;
+    shoppingList = SHOP.clearAll();
+    saveShopping();
+    showToast(`🛒 Emptied the list — ${gone} item${gone === 1 ? "" : "s"} removed`, 3200);
+  }
+
+  function showShopping() {
+    renderShopping();
+    $("shopping-panel").classList.remove("hidden");
+    // Land on the first thing to buy, so a remote can tick items off without
+    // hunting for the first one.
+    focusEl($("shop-list").querySelector(".shop-tick") || $("btn-shop-close"));
+    $("shopping-panel").scrollIntoView({ block: "center", behavior: "smooth" });
+  }
+
+  function hideShopping() {
+    $("shopping-panel").classList.add("hidden");
+    focusEl(defaultFocus());
+  }
+
+  function readShopping() {
+    if (!SHOP) return;
+    showShopping();
+    if (!shoppingList.length) {
+      setVoiceStatus("The shopping list is empty");
+      speak("Your shopping list is empty. Open a recipe and ask me to add what is missing.");
+      return;
+    }
+    setVoiceStatus(`${SHOP.summary(shoppingList).remaining} to buy`);
+    speak(SHOP.speak(shoppingList));
   }
 
   /* ---------------- Fire TV remote (D-pad) navigation ---------------- */
@@ -1908,6 +2174,12 @@
     $("timer-display").scrollIntoView({ block: "center", behavior: "smooth" });
   });
   $("btn-speak").addEventListener("click", () => { if (currentRecipe) speak(scaledSteps()[currentStep]); });
+  $("btn-shop-badge").addEventListener("click", showShopping);
+  $("btn-shop-close").addEventListener("click", hideShopping);
+  $("btn-shop-missing").addEventListener("click", addMissingFromRecipe);
+  $("btn-shop-clear-bought").addEventListener("click", clearShoppingBought);
+  $("btn-shop-empty").addEventListener("click", emptyShopping);
+  $("btn-shop-speak").addEventListener("click", () => { if (SHOP) speak(SHOP.speak(shoppingList)); });
   $("btn-servings-minus").addEventListener("click", () => changeServings(-1));
   $("btn-servings-plus").addEventListener("click", () => changeServings(1));
   $("btn-voice").addEventListener("click", toggleVoice);
@@ -1995,6 +2267,10 @@
     renderKitchenChips();
     renderIngredientSuggestions();
     initPantry();
+    // The list outlives the recipe it was built from, so it is restored like the
+    // pantry is rather than like a recipe's state.
+    loadShopping();
+    renderShopping();
     restoreMuteState();
     ensureRack();
     restoreTimers();

@@ -68,7 +68,9 @@ body {
 .m-ok { color: var(--ok); }
 .m-swap { color: var(--accent-2); }
 .m-miss { color: #e56b6f; }
-.match-cook { margin-top: 12px; width: 100%; }
+.match-actions { display: flex; gap: 12px; margin-top: 12px; }
+.match-actions .btn { flex: 1; }
+.match-cook { width: 100%; }
 .kitchen-empty { color: var(--muted); font-size: 20px; grid-column: 1 / -1; }
 .kitchen-hidden { grid-column: 1 / -1; color: #e56b6f; font-size: 19px; padding: 10px 16px; background: #2a1518; border-left: 6px solid #e56b6f; border-radius: 10px; }
 .cheatsheet { margin-top: 34px; background: var(--panel); border: 1px solid #2a333d; border-left: 6px solid var(--accent-2); border-radius: 14px; padding: 20px 28px; max-width: 720px; }
@@ -245,6 +247,32 @@ body.screen-first .step-card { min-height: 260px; }
 .timer-row-actions { display: flex; gap: 10px; }
 .timer-empty { color: var(--muted); font-size: 19px; }
 .timer-controls { display: flex; gap: 14px; margin-top: 16px; }
+
+/* ---- Shopping list: what the recipe wants that the kitchen does not have ----
+   A global panel like the timers, and for the same reason: you add to it from
+   inside one recipe but read it on your way out of the door. Rows stay one line
+   each so a week of dishes still fits on a 10-foot screen and never buries the
+   step card underneath them. */
+#shopping-panel { margin: 0 48px 34px; }
+.shopping { background: var(--panel); border: 2px solid #33404d; border-radius: 16px; padding: 26px 36px; max-width: 980px; }
+.shopping-head { display: flex; align-items: center; justify-content: space-between; gap: 18px; flex-wrap: wrap; margin-bottom: 14px; }
+.shopping-title { font-size: 30px; font-weight: 800; color: var(--accent-2); }
+.shopping-count { display: inline-block; min-width: 34px; padding: 2px 10px; border-radius: 999px; background: var(--panel-2); color: var(--text); font-size: 20px; font-weight: 700; text-align: center; }
+.shopping-head-actions { display: flex; gap: 12px; flex-wrap: wrap; }
+.shopping-summary { color: var(--muted); font-size: 18px; margin-bottom: 14px; }
+.shopping-list { list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.shop-row { display: flex; align-items: center; gap: 16px; padding: 12px 20px; background: var(--panel-2); border: 2px solid #33404d; border-radius: 14px; border-left: 6px solid var(--accent); }
+.shop-row.asneeded { border-left-color: var(--muted); }
+.shop-row.bought { border-left-color: var(--ok); opacity: .62; }
+.shop-tick { min-width: 60px; font-size: 18px; }
+.shop-qty { color: var(--accent-2); font-size: 21px; font-weight: 700; min-width: 132px; font-variant-numeric: tabular-nums; }
+.shop-row.bought .shop-qty, .shop-row.bought .shop-name { color: var(--muted); text-decoration: line-through; }
+.shop-name { flex: 1; font-size: 21px; }
+.shop-for { color: var(--muted); font-size: 16px; }
+.shop-skip { color: var(--ok); font-size: 16px; }
+.shop-empty { color: var(--muted); font-size: 19px; }
+.shop-add { margin-left: auto; white-space: nowrap; }
+.shop-badge.has-items { border-color: var(--accent-2); color: var(--accent-2); }
 #footer { text-align: center; color: var(--muted); padding: 40px 20px 30px; font-size: 17px; }
 .toast { position: fixed; bottom: 44px; left: 50%; transform: translateX(-50%); background: #0d1117; color: var(--text); border: 1px solid #33404d; border-radius: 999px; padding: 14px 30px; font-size: 20px; box-shadow: 0 8px 26px rgba(0,0,0,.5); z-index: 50; }
 @media (max-width: 900px) {

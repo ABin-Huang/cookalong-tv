@@ -17,6 +17,9 @@
       <button id="btn-timer-badge" class="mic timer-badge hidden" title="Timer running — open the cooking screen">
         <span id="timer-badge-icon">⏱</span><span id="timer-badge-text">00:00</span>
       </button>
+      <button id="btn-shop-badge" class="mic shop-badge" title="Shopping list — what you still need to buy">
+        <span id="shop-badge-icon">🛒</span><span id="shop-badge-text">List</span>
+      </button>
       <button id="btn-mute" class="mic" title="Mute or unmute spoken guidance" aria-pressed="false">
         <span id="mute-icon">🔊</span><span id="mute-label">Voice on</span>
       </button>
@@ -69,6 +72,7 @@
         <li><em>Remote</em> — arrow keys move, OK selects, Back returns</li>
         <li>"cook <em>tomato basil pasta</em>" — open a recipe</li>
         <li>"what can I cook with <em>chicken and garlic</em>" — smart match</li>
+        <li>"add what's missing" / "what do I need to buy" — the shopping list</li>
         <li>"next step" / "previous step"</li>
         <li>"repeat step"</li>
         <li>"set a timer" — adds one, so several pots can run at once</li>
@@ -96,6 +100,7 @@
       <div class="ingredients-head">
         <h4 class="ingredients-title">🧺 What you need</h4>
         <span id="ingredients-summary" class="ingredients-summary" aria-live="polite"></span>
+        <button id="btn-shop-missing" class="btn small shop-add" type="button">🛒 Add what's missing</button>
       </div>
       <ul id="ingredients-list" class="ingredients-list"></ul>
     </section>
@@ -145,6 +150,24 @@
     <ul id="timer-list" class="timer-list" aria-live="polite"></ul>
     <p id="timer-empty" class="timer-empty">No timers yet — open a step and press “Set timer”, or ask for one by voice.</p>
   </section>
+  <!-- The shopping list is global state for the same reason the timers are: you
+       add one dish's missing items from inside that recipe, but you read the list
+       on your way out of the door, and it accumulates across whatever you plan to
+       cook. So it cannot belong to any one recipe's screen. -->
+  <section id="shopping-panel" class="shopping hidden" aria-label="Shopping list">
+    <div class="shopping-head">
+      <span class="shopping-title">🛒 Shopping list <span id="shop-count" class="shopping-count">0</span></span>
+      <div class="shopping-head-actions">
+        <button id="btn-shop-speak" class="btn small">Read it aloud</button>
+        <button id="btn-shop-clear-bought" class="btn small">Clear bought</button>
+        <button id="btn-shop-empty" class="btn small">Empty list</button>
+        <button id="btn-shop-close" class="btn small">Hide</button>
+      </div>
+    </div>
+    <p id="shop-summary" class="shopping-summary" aria-live="polite"></p>
+    <ul id="shop-list" class="shopping-list" aria-live="polite"></ul>
+    <p id="shop-empty" class="shopping-empty">Nothing on the list yet. Open a recipe and press “Add what's missing”, or tell me what is in your kitchen.</p>
+  </section>
   <footer id="footer">
     <span>CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</span>
     <button id="btn-selfcheck" class="btn small footer-check">Device check</button>
@@ -178,6 +201,8 @@
   <script src="servings-engine.js"></script>
   <!-- plan-engine reads durations through timer-engine, so it must load after it -->
   <script src="plan-engine.js"></script>
+  <!-- shopping-engine resolves the scaler and the ingredient engine at load time -->
+  <script src="shopping-engine.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
