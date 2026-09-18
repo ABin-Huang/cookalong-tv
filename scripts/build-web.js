@@ -9,6 +9,7 @@
  *   src/capabilities.js -> public/capabilities-engine.js   (verbatim; it is UMD)
  *   src/progress.js     -> public/progress-engine.js       (verbatim; it is UMD)
  *   src/servings.js     -> public/servings-engine.js       (verbatim; it is UMD)
+ *   src/plan.js         -> public/plan-engine.js           (verbatim; it is UMD)
  *   src/recipes.js      -> public/recipes-data.js          (window.COOKALONG_RECIPES)
  *
  * Usage:
@@ -37,6 +38,7 @@ const artifacts = [
   { out: "public/capabilities-engine.js", content: read("src/capabilities.js") },
   { out: "public/progress-engine.js", content: read("src/progress.js") },
   { out: "public/servings-engine.js", content: read("src/servings.js") },
+  { out: "public/plan-engine.js", content: read("src/plan.js") },
   {
     out: "public/recipes-data.js",
     content: "// AUTO-SYNCED from src/recipes.js — do not edit by hand.\n" +
