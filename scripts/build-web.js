@@ -10,7 +10,8 @@
  *   src/progress.js     -> public/progress-engine.js       (verbatim; it is UMD)
  *   src/servings.js     -> public/servings-engine.js       (verbatim; it is UMD)
  *   src/plan.js         -> public/plan-engine.js           (verbatim; it is UMD)
- *   src/shopping.js     -> public/shopping-engine.js       (verbatim; it is UMD)
+ *   src/shopping.js      -> public/shopping-engine.js       (verbatim; it is UMD)
+ *   src/voice-commands.js-> public/voice-commands-engine.js  (verbatim; it is UMD)
  *   src/recipes.js      -> public/recipes-data.js          (window.COOKALONG_RECIPES)
  *
  * Usage:
@@ -41,6 +42,7 @@ const artifacts = [
   { out: "public/servings-engine.js", content: read("src/servings.js") },
   { out: "public/plan-engine.js", content: read("src/plan.js") },
   { out: "public/shopping-engine.js", content: read("src/shopping.js") },
+  { out: "public/voice-commands-engine.js", content: read("src/voice-commands.js") },
   {
     out: "public/recipes-data.js",
     content: "// AUTO-SYNCED from src/recipes.js — do not edit by hand.\n" +
