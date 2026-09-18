@@ -11,6 +11,7 @@
     "build:web": "node scripts/build-web.js",
     "check:web": "node scripts/build-web.js --check",
     "verify:browser": "node scripts/verify-browser.js",
+    "verify:voice": "node scripts/verify-voice.js",
     "serve": "npx serve public -l 8080",
     "start": "node scripts/serve.js"
   },
