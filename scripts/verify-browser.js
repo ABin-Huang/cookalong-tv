@@ -357,6 +357,306 @@ const record = (name, pass, detail) => {
     !bare.decided && (bare.folds.length > 0 || bare.note.length > 0),
     JSON.stringify(bare));
 
+  // --- the conversation: state, transcript, and the way out of a dead end ----
+  //
+  // This is the block that covers the complaint the app was rewritten for: a
+  // first-time cook pressed the microphone, saw "Listening… speak a command",
+  // said something, and got nothing at all — no answer, no error, no end. The
+  // probe that found it showed chromium's SpeechRecognition producing zero
+  // events in three and a half seconds: not a start, not a result, not an error.
+  //
+  // None of that can be caught by a unit test, because public/app.js is never
+  // loaded there.
+
+  // Stand in for the microphone. The command table is unit-tested in Node, but
+  // nothing there loads app.js, so this is the only way to check the wiring
+  // between a heard sentence and the thing it does — which is precisely where
+  // the advertised-but-unimplemented command lived. This recogniser fires
+  // start, a final result and end, which is the happy path a real one takes.
+  //
+  // The real one is put back afterwards, because the checks that follow are
+  // about what this browser's own recogniser does when it says nothing at all.
+  const say = async phrase => {
+    await page.evaluate(text => {
+      if (!window.__realRecognition) {
+        window.__realRecognition = window.SpeechRecognition || null;
+      }
+      window.SpeechRecognition = class {
+        start() {
+          const results = [[{ transcript: text }]];
+          results[0].isFinal = true;
+          setTimeout(() => {
+            if (this.onstart) this.onstart();
+            if (this.onresult) this.onresult({ resultIndex: 0, results });
+            if (this.onend) this.onend();
+          }, 60);
+        }
+        stop() { if (this.onend) this.onend(); }
+      };
+    }, phrase);
+    await page.click("#btn-voice");
+    await page.waitForTimeout(700);
+  };
+
+  const restoreRealMic = () => page.evaluate(() => {
+    if (window.__realRecognition) window.SpeechRecognition = window.__realRecognition;
+    else delete window.SpeechRecognition;
+  });
+
+  // Start from a fresh load: the last thing the harness did was ask the kitchen
+  // question, and an answer is deliberately allowed to stand for a few seconds.
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(600);
+
+  const resting = await page.evaluate(() => ({
+    state: document.getElementById("voice-status").dataset.state,
+    text: document.getElementById("voice-text").textContent,
+    button: document.getElementById("btn-voice").classList.contains("active"),
+    meter: getComputedStyle(document.querySelector(".voice-meter")).display !== "none",
+    kept: JSON.parse(localStorage.getItem("cookalong.voice-log.v1") || "[]").length,
+  }));
+  record("the top bar rests in a named state instead of implying a live microphone",
+    resting.state === "idle" && !resting.button && !resting.meter,
+    JSON.stringify({ state: resting.state, button: resting.button, meter: resting.meter }));
+  record("the resting line tells a new cook how to talk to this screen, and where the list is",
+    /🎙/.test(resting.text) && /💬/.test(resting.text),
+    `line="${resting.text}"`);
+  record("the conversation survives a reload the way the shopping list does",
+    resting.kept > 0, `${resting.kept} turns kept`);
+
+  // An answer is transient. Standing there forever is how the old bar ended up
+  // saying something stale while offering nothing.
+  await say("what timers are running");
+  const answeredState = await page.evaluate(() => document.getElementById("voice-status").dataset.state);
+  await page.waitForTimeout(9600);
+  const reverted = await page.evaluate(() => ({
+    state: document.getElementById("voice-status").dataset.state,
+    text: document.getElementById("voice-text").textContent,
+  }));
+  record("an answer gives the line back, so the screen always offers the next move",
+    answeredState === "answered" && reverted.state === "idle" && /🎙/.test(reverted.text),
+    `${answeredState} -> ${reverted.state} "${reverted.text}"`);
+
+  // Back to this browser's own recogniser: the checks below are about what it
+  // does when it opens the microphone and then says nothing whatsoever.
+  await restoreRealMic();
+
+  await page.click("#btn-voice");
+  await page.waitForTimeout(300);
+  const listening = await page.evaluate(() => ({
+    state: document.getElementById("voice-status").dataset.state,
+    text: document.getElementById("voice-text").textContent,
+    button: document.getElementById("btn-voice").classList.contains("active"),
+    meter: getComputedStyle(document.querySelector(".voice-meter")).display !== "none",
+  }));
+  record("tapping the microphone shows a listening state with a moving level meter",
+    listening.state === "listening" && listening.button && listening.meter,
+    JSON.stringify(listening));
+
+  // Tapping again stops it. Before this there was no way to end a listen that
+  // never started, because the control believed it was already finished.
+  await page.click("#btn-voice");
+  await page.waitForTimeout(600);
+  const stopped = await page.evaluate(() => document.getElementById("voice-status").dataset.state);
+  record("tapping the microphone again ends the listen", stopped !== "listening", `state="${stopped}"`);
+
+  // And the dead end itself: with a browser that says it can listen and then
+  // says nothing, the screen has to give up and say so.
+  await page.click("#btn-voice");
+  await page.waitForTimeout(4600);
+  const afterSilence = await page.evaluate(() => ({
+    state: document.getElementById("voice-status").dataset.state,
+    text: document.getElementById("voice-text").textContent,
+    button: document.getElementById("btn-voice").classList.contains("active"),
+    log: JSON.parse(localStorage.getItem("cookalong.voice-log.v1") || "[]"),
+  }));
+  record("a microphone that never opens ends in words, not in a stuck listening state",
+    afterSilence.state !== "listening" && !afterSilence.button &&
+      afterSilence.log.some(t => t.who === "cookalong" && /microphone/i.test(t.text)),
+    `state="${afterSilence.state}" text="${afterSilence.text}"`);
+
+  // A recogniser that does open the microphone and then goes quiet is the other
+  // half of the same trap: if the timeout left the control thinking a session was
+  // still running, the next tap would be a request to stop it, and the button
+  // would be dead for the rest of the cook.
+  await page.evaluate(() => {
+    window.SpeechRecognition = class {
+      start() { if (this.onstart) setTimeout(() => this.onstart(), 40); }
+      stop() { /* never reports an end — that is the point */ }
+    };
+  });
+  await page.click("#btn-voice");
+  await page.waitForTimeout(10600);   // just past LISTEN_LIMIT_MS
+  const afterLimit = await page.evaluate(() => ({
+    state: document.getElementById("voice-status").dataset.state,
+    text: document.getElementById("voice-text").textContent,
+  }));
+  await page.click("#btn-voice");
+  await page.waitForTimeout(400);
+  const restarted = await page.evaluate(() =>
+    document.getElementById("voice-status").dataset.state);
+  record("a listen ended by the timeout says so, and leaves the microphone usable",
+    /stopped listening/i.test(afterLimit.text) && restarted === "listening",
+    `after="${afterLimit.text}" then="${restarted}"`);
+  // ...and the listen this check started has to be closable too, or the control
+  // is stuck open for everything that follows.
+  await page.click("#btn-voice");
+  await page.waitForTimeout(400);
+  const closedByTap = await page.evaluate(() =>
+    document.getElementById("voice-status").dataset.state);
+  record("tapping the microphone closes a listen even when the browser reports no end",
+    closedByTap === "idle", `state="${closedByTap}"`);
+  await restoreRealMic();
+
+  // --- the spoken path, driven end to end ----------------------------------
+
+  // The headline regression: this exact phrase was printed in the cheatsheet and
+  // no branch in the app answered it.
+  await say("I'm allergic to dairy");
+  const allergy = await page.evaluate(() => {
+    const chip = [...document.querySelectorAll("#allergen-chips .allergen-chip")]
+      .find(c => c.dataset.allergen === "dairy");
+    return {
+      avoided: chip ? chip.classList.contains("active") : null,
+      text: document.getElementById("voice-text").textContent,
+      log: JSON.parse(localStorage.getItem("cookalong.voice-log.v1") || "[]"),
+    };
+  });
+  record('"I\'m allergic to dairy" — the command the cheatsheet promised and nothing implemented — now works',
+    allergy.avoided === true,
+    `chip active=${allergy.avoided}, line="${allergy.text}"`);
+  record("what the cook said is written down next to what it answered",
+    allergy.log.some(t => t.who === "you" && /allergic to dairy/i.test(t.text)) &&
+      allergy.log.some(t => t.who === "cookalong"),
+    JSON.stringify(allergy.log.slice(-2)));
+
+  await page.evaluate(() => {
+    const chip = [...document.querySelectorAll("#allergen-chips .allergen-chip")]
+      .find(c => c.dataset.allergen === "dairy");
+    if (chip && chip.classList.contains("active")) chip.click();
+  });
+
+  // An utterance the app does not understand has to say so, and point at the
+  // list — silence is what makes a cook think the microphone is broken.
+  await say("banana submarine");
+  const unclear = await page.evaluate(() => ({
+    state: document.getElementById("voice-status").dataset.state,
+    text: document.getElementById("voice-text").textContent,
+  }));
+  record("speech the app cannot place is answered honestly, and points at the list",
+    unclear.state === "error" && /💬/.test(unclear.text),
+    `state="${unclear.state}" text="${unclear.text}"`);
+
+  // A step command has to reach the recipe on screen, not just the matcher.
+  await openRecipe("tomato-basil-pasta");
+  await say("next step");
+  const stepped = await page.evaluate(() => ({
+    label: document.getElementById("step-label").textContent,
+    text: document.getElementById("voice-text").textContent,
+    state: document.getElementById("voice-status").dataset.state,
+  }));
+  record("a spoken step command moves the recipe on screen and says where it landed",
+    /^Step 2\b/.test(stepped.label) && /Step 2/.test(stepped.text) && stepped.state === "answered",
+    JSON.stringify(stepped));
+  await page.click("#btn-back");
+  await page.waitForTimeout(300);
+
+  // --- the conversation panel ----------------------------------------------
+
+  const badge = await page.evaluate(() => ({
+    text: document.getElementById("convo-badge-text").textContent,
+    unread: document.getElementById("btn-convo-badge").classList.contains("has-unread"),
+  }));
+  record("the chat button counts what has been said since the cook last looked",
+    badge.unread && /new/.test(badge.text), JSON.stringify(badge));
+
+  await page.click("#btn-convo-badge");
+  await page.waitForTimeout(400);
+  const panel = await page.evaluate(() => {
+    const box = document.getElementById("conversation-panel");
+    const rows = [...document.querySelectorAll("#convo-list .convo-turn")];
+    return {
+      open: !box.classList.contains("hidden"),
+      mine: rows.filter(r => r.classList.contains("you")).length,
+      theirs: rows.filter(r => r.classList.contains("cookalong")).length,
+      firstWho: rows.length ? rows[0].querySelector(".convo-who").textContent : null,
+      empty: !document.getElementById("convo-empty").classList.contains("hidden"),
+      badge: document.getElementById("convo-badge-text").textContent,
+      inViewport: Math.round(rows.length ? rows[0].getBoundingClientRect().top : -1) < window.innerHeight,
+    };
+  });
+  record("the panel shows both sides of the conversation, on the first screen",
+    panel.open && panel.mine > 0 && panel.theirs > 0 && !panel.empty && panel.inViewport,
+    JSON.stringify(panel));
+  record("opening the panel clears the unread count", !/new/.test(panel.badge), `badge="${panel.badge}"`);
+
+  // The command list behind the same button is generated from the table, so what
+  // the panel teaches and what the matcher answers cannot drift apart.
+  await page.click("#btn-convo-help");
+  await page.waitForTimeout(300);
+  const help = await page.evaluate(() => {
+    const eng = window.CookalongVoiceCommands;
+    const table = eng ? eng.help() : [];
+    const shown = [...document.querySelectorAll("#convo-help-list .cmd-row .cmd-say")]
+      .map(el => el.textContent.replace(/[“”]/g, ""));
+    const sheet = [...document.querySelectorAll("#cheatsheet-list .cmd-row .cmd-say")]
+      .map(el => el.textContent.replace(/[“”]/g, ""));
+    return {
+      taught: table.map(r => r.say),
+      shown,
+      sheet,
+      scopes: [...document.querySelectorAll("#convo-help-list .cmd-scope")].map(el => el.textContent),
+    };
+  });
+  // The panel groups by where a command works, which is a reading order, not the
+  // matcher's precedence order — so the same set is the claim, not the same
+  // sequence.
+  const sorted = list => [...list].sort().join("|");
+  record("the help list on screen is the command table, not a copy of it",
+    help.shown.length === help.taught.length && sorted(help.shown) === sorted(help.taught),
+    `${help.shown.length} shown of ${help.taught.length} in the table`);
+  record("the home-screen cheatsheet renders the same table",
+    help.sheet.length === help.taught.length && sorted(help.sheet) === sorted(help.taught),
+    `${help.sheet.length} rendered of ${help.taught.length}`);
+  record("the list is grouped by where each command works",
+    help.scopes.length >= 2, help.scopes.join(" / "));
+
+  // Escape closes it, and the arrows belong to it while it is open.
+  await page.keyboard.press("Escape");
+  await page.waitForTimeout(300);
+  const closed = await page.evaluate(() => ({
+    open: !document.getElementById("conversation-panel").classList.contains("hidden"),
+    focusInside: !!document.activeElement.closest("#conversation-panel"),
+  }));
+  record("the panel closes on Back and gives focus back to the page",
+    !closed.open && !closed.focusInside, JSON.stringify(closed));
+
+  // --- the standing line survives a 720p screen ----------------------------
+
+  const small = await browser.newPage({ viewport: { width: 1280, height: 720 } });
+  try {
+    await small.goto(URL, { waitUntil: "load" });
+    await small.waitForTimeout(500);
+    const bar = await small.evaluate(() => {
+      const text = document.getElementById("voice-text");
+      const status = document.getElementById("voice-status");
+      const topbar = document.getElementById("topbar");
+      return {
+        clipped: text.scrollWidth > text.clientWidth + 1,
+        line: text.textContent,
+        barHeight: Math.round(topbar.getBoundingClientRect().height),
+        statusInBar: Math.round(status.getBoundingClientRect().bottom) <= Math.round(topbar.getBoundingClientRect().bottom) + 1,
+      };
+    });
+    record("at 720p the line telling the cook how to talk is not cut off",
+      !bar.clipped && bar.statusInBar,
+      `clipped=${bar.clipped} line="${bar.line}"`);
+    record("the top bar stays one row tall at 720p, so it cannot push the answer off screen",
+      bar.barHeight <= 120, `height=${bar.barHeight}px`);
+  } finally {
+    await small.close();
+  }
+
   record("no console errors", errors.length === 0, errors.slice(0, 4).join(" | "));
 
   await browser.close();

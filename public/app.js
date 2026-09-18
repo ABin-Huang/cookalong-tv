@@ -171,7 +171,7 @@
     renderRecipeAllergens();
     renderSwaps();
     renderIngredients();
-    if (kitchenResults.children.length) runKitchenMatch();   // re-rank against the new profile
+    if (kitchenResults.children.length) askKitchen(false);   // re-rank against the new profile
     const label = activeAllergens.size
       ? `avoiding ${[...activeAllergens].join(", ")}`
       : "no allergies set";
@@ -1062,6 +1062,286 @@
     if (el) el.textContent = defaultVoiceStatus();
   }
 
+  /* ---------------- The conversation: what was heard, what was answered -----
+   *
+   * The app used to treat a spoken command as fire-and-forget. The transcript
+   * flashed for three seconds and was gone; the answer was a line in the top bar
+   * that the next command overwrote; and on a device with no installed voice the
+   * answer was handed to speak() and never appeared anywhere at all. A cook who
+   * said something and saw nothing had no way to tell a misheard word from a
+   * broken app — which is exactly the report this section answers.
+   *
+   * So the conversation is state, not an event. It is held here, shown in the
+   * top bar while it happens, kept in a panel the cook can open afterwards, and
+   * written down in one place — `answer()` — so that no code path can silently
+   * drop the half of the exchange the screen is supposed to show.
+   */
+
+  const VOICE = window.CookalongVoiceCommands || null;
+  const VOICE_LOG_KEY = "cookalong.voice-log.v1";
+  const VOICE_LOG_MAX = 40;
+
+  /* A browser can expose SpeechRecognition, accept start(), and then emit
+   * nothing whatsoever: no start event, no result, no error. Chromium does
+   * exactly that when it cannot reach a speech service, and the old code
+   * answered it by leaving "Listening… speak a command" on the screen forever.
+   * These two timeouts are the difference between a status line and a claim:
+   * if nothing comes back within the grace period the microphone was never
+   * really open, and no single utterance should take longer than the limit. */
+  const LISTEN_GRACE_MS = 3500;
+  const LISTEN_LIMIT_MS = 10000;
+
+  let voiceState = "idle";
+  let voiceLog = [];              // [{ who: "you"|"cookalong", text, at }]
+  let voiceUnread = 0;            // turns added since the panel was last opened
+  let voiceRecognition = null;    // the live SpeechRecognition, if any
+  let voiceSession = null;        // { final, interim, handled, live } for the one in flight
+  let voiceWatchdog = null;
+  let answerRestHandle = null;
+
+  /**
+   * The four states the top bar can be in, and what each one promises.
+   *
+   *   idle       nothing is happening; the line offers the next thing to say
+   *   listening  the microphone is open; the line is the cook's own words
+   *   thinking   the words have stopped and the app is working on them
+   *   answered   here is what it did
+   *
+   * Anything that is not listening or thinking clears the watchdog, so a stale
+   * timer can never end a later session.
+   */
+  function setVoiceState(state, text) {
+    voiceState = state;
+    const box = $("voice-status");
+    if (box) box.dataset.state = state;
+    const btn = $("btn-voice");
+    if (btn) btn.classList.toggle("active", state === "listening");
+    if (text != null) setVoiceStatus(text);
+    if (state !== "listening" && state !== "thinking") clearVoiceWatchdog();
+  }
+
+  /**
+   * Back to the resting line: what the cook can do next.
+   *
+   * The old top bar kept the last answer up forever, so a screen that had said
+   * something once said nothing useful again. An answer is worth reading for a
+   * few seconds; after that the line is better spent offering the next move.
+   */
+  function restVoice() {
+    clearVoiceWatchdog();
+    clearTimeout(answerRestHandle);
+    answerRestHandle = null;
+    voiceStatusLive = false;
+    setVoiceState("idle");
+    setDefaultVoiceStatus();
+  }
+
+  function armVoiceWatchdog(ms, onFire) {
+    clearVoiceWatchdog();
+    voiceWatchdog = setTimeout(() => { voiceWatchdog = null; onFire(); }, ms);
+  }
+
+  function clearVoiceWatchdog() {
+    if (!voiceWatchdog) return;
+    clearTimeout(voiceWatchdog);
+    voiceWatchdog = null;
+  }
+
+  /** Recognition failures, in the words of the cook's problem, not the code's. */
+  const RECOGNITION_ERRORS = {
+    "not-allowed": "This browser is not allowed to use the microphone — check the permission prompt.",
+    "service-not-allowed": "This browser will not let the page use its speech service.",
+    "audio-capture": "No microphone was found on this device.",
+    network: "This browser could not reach its speech service, so it cannot hear you.",
+    "no-speech": "I did not hear anything — try again, a little closer to the microphone.",
+    "language-not-supported": "This browser has no speech model for that language.",
+  };
+
+  /* -- the written record --------------------------------------------------- */
+
+  function loadVoiceLog() {
+    let saved = [];
+    try { saved = JSON.parse(localStorage.getItem(VOICE_LOG_KEY) || "[]"); } catch (e) { saved = []; }
+    voiceLog = Array.isArray(saved)
+      ? saved.filter(t => t && t.text && (t.who === "you" || t.who === "cookalong")).slice(-VOICE_LOG_MAX)
+      : [];
+  }
+
+  function saveVoiceLog() {
+    try { localStorage.setItem(VOICE_LOG_KEY, JSON.stringify(voiceLog)); } catch (e) { /* private mode */ }
+  }
+
+  function logTurn(who, text) {
+    const clean = String(text || "").trim();
+    if (!clean) return;
+    voiceLog.push({ who, text: clean, at: new Date().toISOString() });
+    if (voiceLog.length > VOICE_LOG_MAX) voiceLog = voiceLog.slice(-VOICE_LOG_MAX);
+    saveVoiceLog();
+    // While the panel is open the cook is reading it, so nothing is unread.
+    const open = !$("conversation-panel").classList.contains("hidden");
+    if (open) renderConvo();
+    else voiceUnread += 1;
+    renderConvoBadge();
+  }
+
+  function clearConvo() {
+    if (!voiceLog.length) { showToast("Nothing has been said yet", 2400); return; }
+    const gone = voiceLog.length;
+    voiceLog = [];
+    voiceUnread = 0;
+    saveVoiceLog();
+    renderConvo();
+    renderConvoBadge();
+    showToast(`💬 Cleared ${gone} turn${gone === 1 ? "" : "s"}`, 2600);
+  }
+
+  function renderConvo() {
+    const list = $("convo-list");
+    if (!list) return;
+    list.innerHTML = "";
+    voiceLog.forEach(turn => {
+      const li = document.createElement("li");
+      li.className = `convo-turn ${turn.who}`;
+      const who = document.createElement("span");
+      who.className = "convo-who";
+      who.textContent = turn.who === "you" ? "You" : "CookAlong";
+      const text = document.createElement("span");
+      text.className = "convo-said";
+      text.textContent = turn.text;
+      li.append(who, text);
+      list.appendChild(li);
+    });
+    const empty = $("convo-empty");
+    if (empty) empty.classList.toggle("hidden", voiceLog.length > 0);
+    const summary = $("convo-summary");
+    if (summary) {
+      const mine = voiceLog.filter(t => t.who === "you").length;
+      const theirs = voiceLog.length - mine;
+      summary.textContent = voiceLog.length
+        ? `${mine} thing${mine === 1 ? "" : "s"} heard, ${theirs} answered.`
+        : "Nothing on the record yet.";
+    }
+  }
+
+  function renderConvoBadge() {
+    const badge = $("btn-convo-badge");
+    if (!badge) return;
+    const heard = voiceLog.filter(t => t.who === "you").length;
+    badge.classList.toggle("has-unread", voiceUnread > 0);
+    const text = $("convo-badge-text");
+    if (text) text.textContent = voiceUnread ? `${voiceUnread} new` : "Chat";
+    badge.title = voiceUnread
+      ? `${voiceUnread} new turn${voiceUnread === 1 ? "" : "s"} since you last looked`
+      : heard
+        ? `What you and CookAlong have said — ${heard} thing${heard === 1 ? "" : "s"} heard so far`
+        : "Nothing said yet — open this to see what you can say";
+  }
+
+  function openConvo() {
+    renderConvo();
+    $("conversation-panel").classList.remove("hidden");
+    voiceUnread = 0;
+    renderConvoBadge();
+    focusEl($("convo-list").querySelector(".convo-turn") || $("btn-convo-close"));
+  }
+
+  function closeConvo() {
+    $("conversation-panel").classList.add("hidden");
+    setConvoHelp(false);
+    focusEl(defaultFocus());
+  }
+
+  function toggleConvoHelp() {
+    setConvoHelp($("convo-help").classList.contains("hidden"));
+  }
+
+  function setConvoHelp(open) {
+    const panel = $("convo-help");
+    const button = $("btn-convo-help");
+    if (!panel || !button) return;
+    panel.classList.toggle("hidden", !open);
+    button.setAttribute("aria-expanded", String(open));
+    button.textContent = open ? "Hide the list" : "What can I say?";
+  }
+
+  /**
+   * Render the command table. The help view in the panel and the card at the
+   * foot of the home screen both call this, so neither can describe a command
+   * the matcher does not have, and adding a command to the table adds it to
+   * every place the app teaches it.
+   *
+   * Grouped by where the command works rather than by precedence, because a
+   * cook reads this to find a phrase, not to trace the matcher.
+   */
+  function renderCommandList(target) {
+    if (!target) return;
+    target.innerHTML = "";
+    if (!VOICE) return;
+    const rows = VOICE.help();
+    Object.keys(VOICE.SCOPE_LABEL).forEach(scope => {
+      const group = rows.filter(row => row.scope === scope);
+      if (!group.length) return;
+      const head = document.createElement("li");
+      head.className = "cmd-scope";
+      head.textContent = VOICE.SCOPE_LABEL[scope];
+      target.appendChild(head);
+      group.forEach(row => {
+        const li = document.createElement("li");
+        li.className = "cmd-row";
+        const say = document.createElement("span");
+        say.className = "cmd-say";
+        say.textContent = `“${row.say}”`;
+        const help = document.createElement("span");
+        help.className = "cmd-help";
+        help.textContent = row.help;
+        li.append(say, help);
+        target.appendChild(li);
+      });
+    });
+  }
+
+  /** "a, b and c" — a list that can be read out loud without sounding like a dump. */
+  function listWords(items) {
+    const list = (items || []).filter(Boolean);
+    if (!list.length) return "nothing yet";
+    if (list.length === 1) return list[0];
+    return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+  }
+
+  /**
+   * How every answer leaves the app: a line in the top bar, a row in the
+   * transcript, and — only where the device really has a voice — the same words
+   * out loud.
+   *
+   * This funnel is what makes the answer visible on a Fire TV, where speak() is
+   * a deliberate no-op because there is nothing to speak through. The old code
+   * called speak() and stopped there, so the answer to a spoken command was
+   * discarded on exactly the device the app is built for.
+   */
+  function answer(reply, options) {
+    if (!reply) { restVoice(); return ""; }
+    const opts = options || {};
+    const r = typeof reply === "string" ? { status: reply, say: reply } : reply;
+    const say = String(r.say || r.status || "").trim();
+    const status = String(r.status || say).trim();
+    // `log: false` is for answers nobody asked for — the re-rank that follows an
+    // allergy change, say. They still belong on the top bar, but writing them
+    // into the transcript inserts a remark into the middle of an exchange the
+    // cook did not have, and the record stops reading like a conversation.
+    if (say && opts.log !== false) logTurn("cookalong", say);
+    setVoiceState(r.state || "answered", status);
+    if (say) speak(say, !!r.interrupt);
+    // An answer is worth reading for a few seconds, then the line is better
+    // spent offering the next move — but only if the cook has not moved on.
+    clearTimeout(answerRestHandle);
+    answerRestHandle = setTimeout(() => {
+      const el = $("voice-text");
+      if (el && el.textContent !== status) return;
+      restVoice();
+    }, 9000);
+    return say;
+  }
+
   function applyMuteState() {
     $("mute-icon").textContent = voiceMuted ? "🔇" : "🔊";
     $("mute-label").textContent = voiceMuted ? "Voice off" : "Voice on";
@@ -1148,11 +1428,25 @@
     setDefaultVoiceStatus();
   }
 
+  /**
+   * What the resting line says.
+   *
+   * It used to point at the remote's Alexa button and nothing else, which told
+   * a first-time cook nothing about the microphone sitting two centimetres to
+   * the right of the sentence. The line now names the control that is actually
+   * on screen, and the 💬 button, because the list of what the app understands
+   * is behind it.
+   */
   function defaultVoiceStatus() {
-    if (capSummary && !capSummary.spokenPrimary) {
-      return "Spoken guidance unavailable here — steps stay on screen. Say “Alexa, open CookAlong” to hear them.";
+    const canListen = !!(capSummary && capSummary.canListen);
+    const spoken = !!(capSummary && capSummary.spokenPrimary);
+    if (canListen) {
+      return spoken
+        ? "Press 🎙 and talk — or 💬 to see what you can say"
+        : "Press 🎙 and talk — answers stay on screen here";
     }
-    return 'Say "Alexa, open CookAlong" — or just use the remote';
+    if (spoken) return "This screen cannot listen — use the remote's Alexa button";
+    return "No voice in or out here — press 💬 to see what you can say";
   }
 
   function probeRows() {
@@ -1303,136 +1597,421 @@
     wakeLockSentinel = null;
   }
 
-  function handleVoiceCommand(transcript) {
-    const t = transcript.toLowerCase();
-    if (viewHome.classList.contains("hidden") === false) {
-      const recipe = recipes.find(r => t.includes(r.name.toLowerCase()));
-      if (recipe) { openRecipe(recipe.id); setVoiceStatus(`Opening ${recipe.name}`); return; }
-    }
-    if (t.includes("vegan")) { activateDiet("vegan"); setVoiceStatus("Filtered to vegan recipes"); return; }
-    if (t.includes("vegetarian")) { activateDiet("vegetarian"); setVoiceStatus("Filtered to vegetarian recipes"); return; }
-    if (t.includes("gluten")) { activateDiet("gluten-free"); setVoiceStatus("Filtered to gluten-free recipes"); return; }
-    if (t.includes("all recipes") || t.includes("show everything")) { activateDiet("any"); setVoiceStatus("Showing all recipes"); return; }
-    if (/what can i (?:cook|make)|what's in my kitchen|what is in my kitchen|i have|i've got|i have got|my fridge has|冰箱里有|我家里有|家里有/.test(t)) {
-      if (viewRecipe.classList.contains("hidden") === false) { $("btn-back").click(); }
-      kitchenInput.value = t;
-      runKitchenMatch();
-      setVoiceStatus("Matching recipes to your kitchen");
-      return;
-    }
-    if (t.includes("next")) {
-      if (currentRecipe) {
-        if (currentStep < displaySteps().length - 1) { currentStep += 1; renderStep(); speak(`Step ${currentStep + 1}. ${scaledSteps()[currentStep]}`); return; }
-        speak(`That was the last step. Enjoy your ${currentRecipe.name}!`); return;
-      }
-    }
-    if (t.includes("previous") || t.includes("back")) {
-      if (currentRecipe && currentStep > 0) { currentStep -= 1; renderStep(); speak(`Step ${currentStep + 1}. ${scaledSteps()[currentStep]}`); return; }
-    }
-    if (t.includes("repeat") || t.includes("say that again")) { if (currentRecipe) { speak(scaledSteps()[currentStep]); setVoiceStatus("Repeating step"); return; } }
-    if (t.includes("read") || t.includes("speak")) { if (currentRecipe) { speak(scaledSteps()[currentStep]); return; } }
-    if (/cook plan|what'?s the plan|what is the plan|what takes longest|longest wait|what should i start/.test(t)) {
-      // The question a step-at-a-time recipe cannot answer: what is actually
-      // going to take the longest, and which pot should go on first.
-      if (!currentRecipe || !PLAN) {
-        setVoiceStatus("Open a recipe and I'll lay out its timed steps");
-        speak("Open a recipe first, and I will lay out the steps that name a time.");
-        return;
-      }
-      const plan = PLAN.summary(scaledSteps());
-      if (!plan.timedCount) {
-        setVoiceStatus("This recipe names no cooking times");
-        speak(`${currentRecipe.name} does not name a cooking time in any step.`);
-        return;
-      }
-      const long = plan.longest;
-      setVoiceStatus(`${plan.timedCount} timed steps — longest ${shortDuration(long.seconds)} on step ${long.index + 1}`);
-      speak(`${plan.timedCount} of ${plan.totalCount} steps name a time, and the times they name add up to ` +
-        `${humanDuration(plan.namedSeconds)}. The longest single wait is step ${long.index + 1}. ` +
-        `Any of them can be started from the cook plan.`);
-      return;
-    }
-    if (/what do i need to buy|what to buy|shopping list|read (my|the) list|what'?s on my list/.test(t)) {
-      readShopping();
-      return;
-    }
-    if (/add (what'?s |the )?missing|what'?s missing|add what i need|add to (my |the )?(shopping )?list|add it to my list/.test(t)) {
-      // "Add what's missing" is the command that turns a recipe you cannot quite
-      // cook into a trip to the shop.
-      addMissingFromRecipe();
-      return;
-    }
-    if (t.includes("timer")) {
-      if (t.includes("set") || t.includes("add") || t.includes("start a")) {
-        const secs = suggestedTimerSeconds();
-        addStepTimer();
-        setVoiceStatus(`Timer added for ${humanDuration(secs)}`);
-        speak(`Timer added for ${humanDuration(secs)}`);
-        return;
-      }
-      if (t.includes("pause") || t.includes("stop") || t.includes("cancel")) {
-        const counting = rack ? rack.running().length : 0;
-        if (counting) ensureRack().pauseAll();
-        setVoiceStatus(counting
-          ? `${counting} timer${counting === 1 ? "" : "s"} paused`
-          : "Nothing was counting");
-        if (counting) speak(`Paused ${counting === 1 ? "the timer" : `${counting} timers`}`);
-        return;
-      }
-      if (t.includes("start") || t.includes("resume")) {
-        const next = rack && rack.next();
-        if (next) {
-          rack.start(next.id);
-          setVoiceStatus(`Started ${next.label || "the timer"}`);
-          speak(`Started ${next.label || "the timer"}`);
-        } else {
-          setVoiceStatus("There is no timer waiting to start");
-          speak("There is no timer waiting to start");
-        }
-        return;
-      }
-      // "what timers are running" — the answer a single-timer app cannot give.
-      const live = rack ? rack.active() : [];
-      if (live.length) {
-        const soonest = live[0];
-        setVoiceStatus(`${live.length} timer${live.length === 1 ? "" : "s"} — next ${fmt(soonest.timer.remainingSeconds)}`);
-        speak(`You have ${live.length} timer${live.length === 1 ? "" : "s"} going. ` +
-          `Next is ${soonest.label || "a timer"}, ${soonest.timer.speak()} left.`);
-      } else {
-        setVoiceStatus("No timers are running");
-        speak("No timers are running");
-      }
-      return;
-    }
-    setVoiceStatus("I didn't catch that. Try next step, or set a timer.");
+  /**
+   * One utterance, end to end: show it, match it, answer it.
+   *
+   * The transcript is recorded here rather than in the recognition callbacks,
+   * because this is the only place a heard sentence becomes an action — so the
+   * panel is a record of what the app acted on, not of everything the recogniser
+   * happened to guess at. The yield before responding is what makes "thinking"
+   * visible at all: the match is synchronous, so without it the state would be
+   * set and replaced inside a single frame.
+   */
+  function interpret(transcript) {
+    const said = String(transcript || "").trim();
+    if (voiceSession) voiceSession.handled = true;
+    stopVoiceRecognition();
+    if (!said) { restVoice(); return; }
+    logTurn("you", said);
+    setVoiceState("thinking", `“${said}” — thinking…`);
+    setTimeout(() => respond(said), 180);
   }
 
+  /**
+   * Match one utterance against the command table and run what it names.
+   *
+   * Which commands exist, and which of them a phrase belongs to, is decided
+   * entirely by src/voice-commands.js — the same table the cheatsheet and the
+   * help panel are rendered from. Nothing here re-implements a rule, because a
+   * second copy of a rule is how the advertised list and the working list drift
+   * apart.
+   */
+  function respond(said) {
+    if (!VOICE) {
+      answer({
+        state: "error",
+        status: "Voice commands are unavailable",
+        say: "The command table did not load, so I cannot match what you said. Try the buttons, or reload the page.",
+      });
+      return;
+    }
+
+    const hit = VOICE.findCommand(said, {
+      recipes,
+      allergens: (engine && engine.COMMON_ALLERGENS) || [],
+      atHome: !viewHome.classList.contains("hidden"),
+      hasRecipe: !!currentRecipe,
+    });
+
+    if (!hit) {
+      // Honest, and pointed: say that it did not understand, and say where the
+      // list of things it does understand is. "Nothing happened" is the outcome
+      // that makes a cook conclude the microphone is broken.
+      answer({
+        state: "error",
+        status: "I didn't catch that — 💬 has the list",
+        say: `I did not catch “${said}”. I did not catch that. ` +
+          "Press the 💬 button to see what I can do, or try “what can I cook”.",
+      });
+      return;
+    }
+
+    const action = VOICE_ACTIONS[hit.id];
+    if (!action) {
+      answer({
+        state: "error",
+        status: "That command has no action",
+        say: `I know “${hit.command.say}” but nothing is wired up for it. Press 💬 and try another one.`,
+      });
+      return;
+    }
+    answer(action(hit.capture, said));
+  }
+
+  /** The diet chips, with an answer that says which list is now on screen. */
+  function applyDiet(diet) {
+    activateDiet(diet);
+    const label = diet === "any" ? "all recipes" : `${diet} recipes`;
+    return { status: `Showing ${label}`, say: `Showing ${label}.` };
+  }
+
+  /** The question a step-at-a-time recipe cannot answer: what actually takes longest. */
+  function cookPlanReply() {
+    if (!currentRecipe || !PLAN) {
+      return {
+        status: "Open a recipe and I'll lay out its timed steps",
+        say: "Open a recipe first, and I will lay out the steps that name a time.",
+      };
+    }
+    const plan = PLAN.summary(scaledSteps());
+    if (!plan.timedCount) {
+      return {
+        status: `${currentRecipe.name} names no cooking times`,
+        say: `${currentRecipe.name} does not name a cooking time in any step.`,
+      };
+    }
+    const long = plan.longest;
+    return {
+      status: `${plan.timedCount} timed steps — longest ${shortDuration(long.seconds)} on step ${long.index + 1}`,
+      say: `${plan.timedCount} of ${plan.totalCount} steps name a time, and the times they name add up to ` +
+        `${humanDuration(plan.namedSeconds)}. The longest single wait is step ${long.index + 1}. ` +
+        "Any of them can be started from the cook plan.",
+    };
+  }
+
+  /**
+   * What each command in the table does, keyed by the same id the table uses.
+   *
+   * The split is deliberate: the table owns how a phrase is recognised and what
+   * the app teaches, this owns what happens next. An id in one without the other
+   * is caught by `respond`, which says so out loud instead of failing silently.
+   *
+   * Every action returns the reply rather than speaking it, so the single
+   * `answer()` funnel writes the top bar, the transcript and the voice — which
+   * is how a command cannot end up answering on only one of them.
+   */
+  const VOICE_ACTIONS = {
+    allergy: capture => {
+      const known = (engine && engine.COMMON_ALLERGENS) || [];
+      if (!capture.allergen) {
+        return { status: "Which one?", say: `Which one? I know ${listWords(known)}.` };
+      }
+      const avoiding = activeAllergens.has(capture.allergen);
+      if (capture.remove) {
+        if (!avoiding) {
+          return {
+            status: `Not avoiding ${capture.allergen} anyway`,
+            say: `I was not leaving ${capture.allergen} out.`,
+          };
+        }
+        toggleAllergen(capture.allergen);
+        return {
+          status: `${capture.allergen} is back on the menu`,
+          say: `${capture.allergen} is back on the menu.`,
+        };
+      }
+      if (avoiding) {
+        return {
+          status: `Already avoiding ${capture.allergen}`,
+          say: `I am already leaving ${capture.allergen} out.`,
+        };
+      }
+      // Declaring an allergy sets it. A toggle would mean saying it twice
+      // quietly put the ingredient back, which is the one direction this must
+      // never move in on its own.
+      toggleAllergen(capture.allergen);
+      return {
+        status: `Leaving ${capture.allergen} out from now on`,
+        say: `Leaving ${capture.allergen} out of every recipe from now on.`,
+      };
+    },
+
+    "open-recipe": capture => {
+      openRecipe(capture.recipe.id);
+      return { status: `Opening ${capture.recipe.name}`, say: `Opening ${capture.recipe.name}.` };
+    },
+
+    "diet-vegan": () => applyDiet("vegan"),
+    "diet-vegetarian": () => applyDiet("vegetarian"),
+    "diet-gluten-free": () => applyDiet("gluten-free"),
+    "diet-all": () => applyDiet("any"),
+
+    "timer-set": () => {
+      const seconds = suggestedTimerSeconds();
+      addStepTimer();
+      return { status: `Timer added for ${humanDuration(seconds)}`, say: `Timer added for ${humanDuration(seconds)}.` };
+    },
+    "timer-pause": () => {
+      const counting = rack ? rack.running().length : 0;
+      if (counting) ensureRack().pauseAll();
+      return counting
+        ? {
+          status: `${counting} timer${counting === 1 ? "" : "s"} paused`,
+          say: `Paused ${counting === 1 ? "the timer" : `${counting} timers`}.`,
+        }
+        : { status: "Nothing was counting", say: "No timer was counting." };
+    },
+    "timer-resume": () => {
+      const next = rack && rack.next();
+      if (!next) {
+        return { status: "There is no timer waiting to start", say: "There is no timer waiting to start." };
+      }
+      rack.start(next.id);
+      return { status: `Started ${next.label || "the timer"}`, say: `Started ${next.label || "the timer"}.` };
+    },
+    "timer-status": () => {
+      const live = rack ? rack.active() : [];
+      if (!live.length) return { status: "No timers are running", say: "No timers are running." };
+      const soonest = live[0];
+      return {
+        status: `${live.length} timer${live.length === 1 ? "" : "s"} — next ${fmt(soonest.timer.remainingSeconds)}`,
+        say: `You have ${live.length} timer${live.length === 1 ? "" : "s"} going. ` +
+          `Next is ${soonest.label || "a timer"}, ${soonest.timer.speak()} left.`,
+      };
+    },
+
+    "kitchen-match": (capture, said) => {
+      if (!viewRecipe.classList.contains("hidden")) $("btn-back").click();
+      kitchenInput.value = said;
+      return runKitchenMatch();
+    },
+
+    "add-missing": () => addMissingFromRecipe(),
+    "read-shopping": () => readShopping(),
+    "cook-plan": () => cookPlanReply(),
+
+    "next-step": () => {
+      if (currentStep < displaySteps().length - 1) {
+        currentStep += 1;
+        renderStep();
+        return {
+          status: `Step ${currentStep + 1} of ${scaledSteps().length}`,
+          say: `Step ${currentStep + 1}. ${scaledSteps()[currentStep]}`,
+        };
+      }
+      return {
+        status: "That was the last step",
+        say: `That was the last step. Enjoy your ${currentRecipe.name}!`,
+      };
+    },
+    "prev-step": () => {
+      if (currentStep <= 0) return { status: "This is the first step", say: "This is the first step." };
+      currentStep -= 1;
+      renderStep();
+      return {
+        status: `Step ${currentStep + 1} of ${scaledSteps().length}`,
+        say: `Step ${currentStep + 1}. ${scaledSteps()[currentStep]}`,
+      };
+    },
+    "repeat-step": () => ({ status: "Repeating the step", say: scaledSteps()[currentStep] }),
+    "read-step": () => ({ status: "Reading the step", say: scaledSteps()[currentStep] }),
+
+    "open-log": () => {
+      openConvo();
+      const heard = voiceLog.filter(t => t.who === "you").length;
+      return heard
+        ? {
+          status: `${heard} thing${heard === 1 ? "" : "s"} heard so far`,
+          say: `Here is our conversation — ${heard} thing${heard === 1 ? "" : "s"} so far.`,
+        }
+        : {
+          status: "Nothing said yet",
+          say: "We have not said anything yet. Press the microphone and ask me something.",
+        };
+    },
+
+    help: () => {
+      openConvo();
+      setConvoHelp(true);
+      return { status: "Here is what you can say", say: "Here is what you can say. The list is on screen now." };
+    },
+  };
+
+  function stopVoiceRecognition() {
+    if (!voiceRecognition) return;
+    try { voiceRecognition.stop(); } catch (e) { /* already stopped */ }
+  }
+
+  /**
+   * Open the microphone — and be honest about it if it never really opens.
+   *
+   * The old advice was that a microphone button either works or throws. It does
+   * not. A browser will hand back a SpeechRecognition object, accept start(), and
+   * then produce no events at all when it cannot reach a speech service, which is
+   * exactly what chromium does in the browser this app is verified in. The old
+   * code wrote "Listening… speak a command" and left it there indefinitely, so
+   * the screen went on insisting it was awake while nothing whatsoever happened.
+   *
+   * Every way this can end now ends in words: a result, a named error, a
+   * timeout, or an end with nothing heard. There is no path that leaves the line
+   * claiming to listen.
+   */
   function toggleVoice() {
     // No in-page microphone on this device: route to the panel that explains
     // how to talk, instead of a control whose only outcome is a complaint.
     if (capSummary && !capSummary.canListen) { openSelfCheck(); return; }
+    // Tapping again while it is open is a request to stop.
+    if (voiceRecognition) {
+      // A deliberate stop is not a failure, so mark the session handled before
+      // anything can report it as one.
+      if (voiceSession) voiceSession.handled = true;
+      stopVoiceRecognition();
+      // The browser that started this whole section emits no events at all, so
+      // `onend` cannot be relied on to tidy up — and if it never fires, the next
+      // tap would be a request to stop a session that is already over, and the
+      // button would be dead for the rest of the cook. Clearing here is what
+      // makes the stop path deterministic; `onend` still runs and is harmless.
+      clearVoiceWatchdog();
+      voiceRecognition = null;
+      voiceListening = false;
+      restVoice();
+      return;
+    }
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) { showToast("Voice recognition isn't supported in this browser.", 4000); return; }
-    if (voiceListening && window.__recognition) { window.__recognition.stop(); return; }
+
     const recognition = new SR();
+    voiceRecognition = recognition;
+    voiceSession = { final: "", interim: "", handled: false, live: false };
+
     recognition.lang = "en-US";
-    recognition.interimResults = false;
+    // The cook asked to see themselves talking. interimResults is what puts the
+    // words on screen while they are still being said; without it the line reads
+    // "Listening…" and stays that way until the whole sentence is over, which is
+    // indistinguishable from a hang.
+    recognition.interimResults = true;
     recognition.continuous = false;
-    recognition.onresult = event => {
-      const transcript = event.results[0][0].transcript;
-      showToast(`🎙 "${transcript}"`, 3000);
-      handleVoiceCommand(transcript);
-      voiceListening = false;
-      $("btn-voice").classList.remove("active");
+    recognition.maxAlternatives = 1;
+
+    // The first real sign of life ends the grace period and starts the limit:
+    // from here the microphone is genuinely open, so the only remaining question
+    // is whether the utterance ever finishes.
+    const onLive = () => {
+      if (!voiceSession || voiceSession.live) return;
+      voiceSession.live = true;
+      armVoiceWatchdog(LISTEN_LIMIT_MS, onTooLong);
     };
-    recognition.onerror = () => { voiceListening = false; $("btn-voice").classList.remove("active"); setVoiceStatus("Voice error — try again"); };
-    recognition.onend = () => { voiceListening = false; $("btn-voice").classList.remove("active"); };
-    window.__recognition = recognition;
-    recognition.start();
+    recognition.onstart = onLive;
+    recognition.onaudiostart = onLive;
+    recognition.onspeechstart = onLive;
+    recognition.onsoundstart = onLive;
+
+    recognition.onresult = event => {
+      onLive();
+      let interim = "";
+      for (let i = event.resultIndex; i < event.results.length; i += 1) {
+        const result = event.results[i];
+        const words = result[0] ? result[0].transcript : "";
+        if (result.isFinal) voiceSession.final += words;
+        else interim += words;
+      }
+      voiceSession.interim = interim;
+      const heard = (voiceSession.final + interim).trim();
+      if (heard) setVoiceState("listening", `“${heard}”`);
+      if (voiceSession.final.trim()) interpret(voiceSession.final.trim());
+    };
+
+    recognition.onerror = event => {
+      const code = (event && event.error) || "unknown";
+      // Tapping the microphone again to stop it is not a failure to report.
+      if (code === "aborted") { restVoice(); return; }
+      if (voiceSession) voiceSession.handled = true;
+      const line = RECOGNITION_ERRORS[code] || `This browser's speech recogniser failed (${code}).`;
+      answer({
+        state: "error",
+        status: line,
+        say: `${line} Use the remote, or press 💬 to see what I can do.`,
+      });
+    };
+
+    recognition.onend = () => {
+      const session = voiceSession;
+      clearVoiceWatchdog();
+      voiceRecognition = null;
+      voiceListening = false;
+      if (!session || session.handled) return;
+      // A sentence cut off before it was finalised is still worth acting on: the
+      // cook said it, and being ignored is worse than being answered.
+      const heard = (session.final || session.interim).trim();
+      if (heard) { interpret(heard); return; }
+      session.handled = true;
+      answer({
+        state: "error",
+        status: "I didn't catch that",
+        say: "I did not make out anything. Try again, or press 💬 to see what I can do.",
+      });
+    };
+
+    /** Something came back, but the utterance never finished. */
+    function onTooLong() {
+      if (!voiceSession || voiceSession.handled) return;
+      voiceSession.handled = true;
+      // The end event may never come — that is the same failure the grace period
+      // covers — so this path has to clear the recognition itself. Leaving it set
+      // would make the next tap a request to stop a session that is already over,
+      // and the microphone button would be dead for the rest of the cook.
+      voiceRecognition = null;
+      voiceListening = false;
+      answer({
+        state: "error",
+        status: "That took too long — I stopped listening",
+        say: "That took too long, so I stopped listening. Try a shorter command, like “next step”.",
+      });
+    }
+
+    /** Nothing came back at all: the microphone was never really open. */
+    function onDeaf() {
+      if (!voiceSession || voiceSession.handled) return;
+      voiceSession.handled = true;
+      voiceRecognition = null;
+      voiceListening = false;
+      answer({
+        state: "error",
+        status: "No microphone is coming through",
+        say: "This screen is not picking up the microphone — the browser's speech service " +
+          "may be blocked, or there may be no microphone. Use the remote, or press 💬 to see what I can do.",
+      });
+    }
+
     voiceListening = true;
-    $("btn-voice").classList.add("active");
-    setVoiceStatus("Listening… speak a command");
+    setVoiceState("listening", "Listening… say something like “next step”");
+    armVoiceWatchdog(LISTEN_GRACE_MS, onDeaf);
+
+    try {
+      recognition.start();
+    } catch (e) {
+      // Some browsers throw synchronously when no microphone is attached.
+      clearVoiceWatchdog();
+      voiceRecognition = null;
+      voiceListening = false;
+      voiceSession.handled = true;
+      answer({
+        state: "error",
+        status: "Could not open the microphone",
+        say: "Could not open the microphone. Use the remote, or the remote's Alexa button.",
+      });
+    }
   }
 
   function activateDiet(diet) {
@@ -1664,7 +2243,7 @@
         onAnother: () => {
           const next = loadTonight(signature).concat([decision.pick.recipe.id]);
           saveTonight(signature, next);
-          runKitchenMatch();
+          askKitchen();
         },
       });
       card.classList.add("is-decided");
@@ -1693,20 +2272,42 @@
       ));
     }
 
-    // The spoken answer leads with the dish, and says the same thing the card
-    // says. "One swap and you are there" on its own invites the cook to hear "no
+    // The answer leads with the dish, and says the same thing the card says.
+    // "One swap and you are there" on its own invites the cook to hear "no
     // shopping needed", which is exactly what a swap does not promise; with the
     // screen off, the spoken line is the only line there is.
-    speak(decision
-      ? `Tonight, cook ${decision.pick.recipe.name}. ` +
-        (decision.ready
-          ? "You have everything it needs."
-          : "Nothing essential is missing — one swap and you are there.")
-      : `I found ${browse.length} recipes you can make.`);
-    setVoiceStatus(decision ? `Tonight: ${decision.pick.recipe.name}` : `Found ${browse.length} matches`);
+    //
+    // It is returned rather than spoken here so that the one funnel writes the
+    // top bar, the transcript and the voice together — and so the voice command
+    // that asked the question and the button that asked it give the same answer
+    // in the same words.
+    const reply = {
+      status: decision ? `Tonight: ${decision.pick.recipe.name}` : `Found ${browse.length} matches`,
+      say: decision
+        ? `Tonight, cook ${decision.pick.recipe.name}. ` +
+          (decision.ready
+            ? "You have everything it needs."
+            : "Nothing essential is missing — one swap and you are there.")
+        : `I found ${browse.length} recipes you can make.`,
+    };
     showToast(decision
       ? `🧺 Tonight: ${decision.pick.recipe.name}`
       : `🧺 ${browse.length} recipe${browse.length > 1 ? "s" : ""} matched`, 3000);
+    return reply;
+  }
+
+  /**
+   * The same question asked with the remote instead of the microphone.
+   *
+   * `runKitchenMatch` works out the answer and returns it; whoever asked decides
+   * how to deliver it. Both routes deliver it through `answer()` so the top bar,
+   * the transcript and the voice say the same thing — otherwise the log would
+   * only record half of the conversations a cook actually had.
+   */
+  function askKitchen(logged) {
+    const reply = runKitchenMatch();
+    if (reply) answer(reply, { log: logged !== false });
+    return reply;
   }
 
   function saveKitchenInputToPantry() {
@@ -1726,7 +2327,7 @@
     savePantry();
     setVoiceStatus(`Pantry cleared (${count} ingredient${count > 1 ? "s" : ""} removed)`);
     showToast(`🍱 Pantry cleared — ${count} ingredient${count > 1 ? "s" : ""} removed`, 3000);
-    if (kitchenResults.children.length) runKitchenMatch();
+    if (kitchenResults.children.length) askKitchen(false);
   }
 
   /**
@@ -2024,28 +2625,39 @@
   }
 
   function addNeeds(items, label) {
-    if (!SHOP) return;
+    if (!SHOP) return null;
     if (!items.length) {
-      setVoiceStatus(`Nothing to buy for ${label}`);
       showToast(`Nothing to buy for ${label} — your kitchen already covers it`, 3400);
-      return;
+      return {
+        status: `Nothing to buy for ${label}`,
+        say: `Nothing to buy for ${label} — your kitchen already covers it.`,
+      };
     }
     shoppingList = SHOP.addItems(shoppingList, items);
     saveShopping();
     const remaining = SHOP.summary(shoppingList).remaining;
     const word = items.length === 1 ? "item" : "items";
-    setVoiceStatus(`${remaining} to buy`);
     showToast(`🛒 Added ${items.length} ${word} for ${label} — ${remaining} to buy`, 3800);
+    return {
+      status: `${remaining} to buy`,
+      say: `Added ${items.length} ${word} for ${label}. ${remaining} still to buy.`,
+    };
   }
 
   function addMissingFromRecipe() {
-    if (!SHOP) return;
-    if (!currentRecipe) {
-      setVoiceStatus("Open a recipe and I'll list what it needs");
-      speak("Open a recipe first, then ask me to add what is missing.");
-      return;
+    if (!SHOP) {
+      return { status: "The shopping list is unavailable", say: "The shopping list engine did not load." };
     }
-    addNeeds(needsToBuy(currentRecipe), currentRecipe.name);
+    if (!currentRecipe) {
+      return {
+        status: "Open a recipe and I'll list what it needs",
+        say: "Open a recipe first, then ask me to add what is missing.",
+      };
+    }
+    // This used to change the top bar and stop there — no voice, no transcript —
+    // so the one command that turns a dish you cannot cook into a shopping trip
+    // was also the one command that answered without saying anything.
+    return addNeeds(needsToBuy(currentRecipe), currentRecipe.name);
   }
 
   /**
@@ -2061,7 +2673,8 @@
       have,
       profile: currentProfile(),
     }).items;
-    addNeeds(items, recipe.name);
+    const reply = addNeeds(items, recipe.name);
+    if (reply) answer(reply);
   }
 
   function shopRow(item) {
@@ -2197,15 +2810,20 @@
   }
 
   function readShopping() {
-    if (!SHOP) return;
+    if (!SHOP) {
+      return { status: "The shopping list is unavailable", say: "The shopping list engine did not load." };
+    }
     showShopping();
     if (!shoppingList.length) {
-      setVoiceStatus("The shopping list is empty");
-      speak("Your shopping list is empty. Open a recipe and ask me to add what is missing.");
-      return;
+      return {
+        status: "The shopping list is empty",
+        say: "Your shopping list is empty. Open a recipe and ask me to add what is missing.",
+      };
     }
-    setVoiceStatus(`${SHOP.summary(shoppingList).remaining} to buy`);
-    speak(SHOP.speak(shoppingList));
+    return {
+      status: `${SHOP.summary(shoppingList).remaining} to buy`,
+      say: SHOP.speak(shoppingList),
+    };
   }
 
   /* ---------------- Fire TV remote (D-pad) navigation ---------------- */
@@ -2347,10 +2965,20 @@
   $("btn-speak").addEventListener("click", () => { if (currentRecipe) speak(scaledSteps()[currentStep]); });
   $("btn-shop-badge").addEventListener("click", showShopping);
   $("btn-shop-close").addEventListener("click", hideShopping);
-  $("btn-shop-missing").addEventListener("click", addMissingFromRecipe);
+  $("btn-shop-missing").addEventListener("click", () => {
+    const reply = addMissingFromRecipe();
+    if (reply) answer(reply);
+  });
   $("btn-shop-clear-bought").addEventListener("click", clearShoppingBought);
   $("btn-shop-empty").addEventListener("click", emptyShopping);
-  $("btn-shop-speak").addEventListener("click", () => { if (SHOP) speak(SHOP.speak(shoppingList)); });
+  $("btn-shop-speak").addEventListener("click", () => {
+    const reply = readShopping();
+    if (reply) answer(reply);
+  });
+  $("btn-convo-badge").addEventListener("click", openConvo);
+  $("btn-convo-close").addEventListener("click", closeConvo);
+  $("btn-convo-clear").addEventListener("click", clearConvo);
+  $("btn-convo-help").addEventListener("click", toggleConvoHelp);
   $("btn-servings-minus").addEventListener("click", () => changeServings(-1));
   $("btn-servings-plus").addEventListener("click", () => changeServings(1));
   $("btn-voice").addEventListener("click", toggleVoice);
@@ -2369,14 +2997,14 @@
     activeAllergens.clear();
     saveAllergens(); renderAllergenChips(); renderGrid(); renderRecipeAllergens();
     renderSwaps(); renderIngredients();
-    if (kitchenResults.children.length) runKitchenMatch();
+    if (kitchenResults.children.length) askKitchen(false);
     showToast("✓ Allergies cleared", 2500);
   });
   if (kitchenInput) {
-    $("btn-kitchen-find").addEventListener("click", runKitchenMatch);
+    $("btn-kitchen-find").addEventListener("click", askKitchen);
     $("btn-pantry-add").addEventListener("click", saveKitchenInputToPantry);
     $("btn-pantry-clear").addEventListener("click", clearPantry);
-    kitchenInput.addEventListener("keydown", e => { if (e.key === "Enter") runKitchenMatch(); });
+    kitchenInput.addEventListener("keydown", e => { if (e.key === "Enter") askKitchen(); });
     // Typing means the cook is changing the question, so the chips and the hint
     // come back the moment the kitchen stops matching the answer on screen.
     kitchenInput.addEventListener("input", updateComposing);
@@ -2389,6 +3017,13 @@
     if (!$("timer-alert").classList.contains("hidden")) {
       // the alert owns the screen until it is dismissed
       if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); dismissTimerAlert(); }
+      else if (DIRS[e.key]) e.preventDefault();
+      return;
+    }
+    if (!$("conversation-panel").classList.contains("hidden")) {
+      // The panel is a modal, so the remote belongs to it: arrows must not walk
+      // focus off it onto the page behind.
+      if (e.key === "Escape" || e.key === "Backspace") { e.preventDefault(); closeConvo(); }
       else if (DIRS[e.key]) e.preventDefault();
       return;
     }
@@ -2451,8 +3086,18 @@
     renderTimers();
     renderResume();
 
-    voiceStatusLive = false;
-    setDefaultVoiceStatus();
+    // The conversation outlives the session the same way the shopping list
+    // does: a cook who walks away mid-answer should be able to come back and
+    // read what was said.
+    loadVoiceLog();
+    renderConvo();
+    renderConvoBadge();
+    // Both places the app teaches its commands are rendered from the table, so
+    // there is no hand-written list left to drift away from the matcher.
+    renderCommandList($("cheatsheet-list"));
+    renderCommandList($("convo-help-list"));
+
+    restVoice();
 
     // The wake lock is dropped whenever the page is hidden, so take it back.
     document.addEventListener("visibilitychange", () => {

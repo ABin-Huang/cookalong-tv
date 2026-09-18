@@ -39,6 +39,7 @@ const ENGINE_SCRIPTS = {
   CookalongServings: "servings-engine.js",
   CookalongPlan: "plan-engine.js",
   CookalongShopping: "shopping-engine.js",
+  CookalongVoiceCommands: "voice-commands-engine.js",
 };
 
 test("every element app.js looks up is actually declared in index.html", () => {
@@ -107,6 +108,7 @@ test("the shipped engines are byte-identical to their src/ originals", () => {
     ["src/servings.js", "public/servings-engine.js"],
     ["src/plan.js", "public/plan-engine.js"],
     ["src/shopping.js", "public/shopping-engine.js"],
+    ["src/voice-commands.js", "public/voice-commands-engine.js"],
   ];
   const normalize = s => s.replace(/\r\n/g, "\n");
   pairs.forEach(([from, to]) => assert.strictEqual(
@@ -144,4 +146,57 @@ test("the speech guard is present, not just the speech call", () => {
     "speak() must consult the measured verdict, not just window.speechSynthesis");
   assert.match(app, /!capSummary\.canListen/,
     "the microphone button must check whether listening is possible");
+});
+
+test("the voice command table is loaded before the script that matches with it", () => {
+  // app.js resolves window.CookalongVoiceCommands at parse time and both the
+  // matcher and the rendered cheatsheet read it. Reorder the tags and every
+  // spoken command falls through to "I didn't catch that" — the exact failure
+  // this table was introduced to make impossible.
+  const engineAt = html.indexOf('src="voice-commands-engine.js"');
+  const appAt = html.indexOf('src="app.js"');
+  assert.ok(engineAt !== -1, "index.html must load voice-commands-engine.js");
+  assert.ok(appAt !== -1, "index.html must load app.js");
+  assert.ok(engineAt < appAt,
+    "voice-commands-engine.js must come before app.js, or the matcher has no table to read");
+});
+
+test("the advertised commands are generated from the table, never typed into the markup", () => {
+  // The list that used to live here had drifted: it offered "I'm allergic to
+  // dairy" and no branch in app.js answered it. A hand-written list of what the
+  // app understands is a promise nobody checks, so the markup must not contain
+  // one — it holds an empty <ul> and the table fills it at boot.
+  const sheet = html.slice(html.indexOf('id="voice-cheatsheet"'));
+  const body = sheet.slice(0, sheet.indexOf("</aside>"));
+  assert.ok(body.includes('id="cheatsheet-list"'),
+    "the cheatsheet must have a list for the command table to fill");
+  assert.ok(!/<li[^>]*>[^<]*["“]/i.test(body),
+    "the cheatsheet still has a hand-typed command in it — render it from src/voice-commands.js instead");
+
+  // And the app has to actually fill both places the table is taught.
+  assert.match(app, /renderCommandList\(\$\("cheatsheet-list"\)\)/,
+    "app.js must render the command table into the cheatsheet");
+  assert.match(app, /renderCommandList\(\$\("convo-help-list"\)\)/,
+    "app.js must render the command table into the help panel");
+});
+
+test("the conversation is shown in the top bar and written down in the panel", () => {
+  // Two halves of one complaint: the cook could not tell that the app was
+  // listening, and could not see afterwards what had been said. The state has to
+  // reach the top bar, and the transcript has to reach the panel — and both have
+  // to be driven from one place, or half of each exchange goes missing.
+  ["idle", "listening", "thinking", "answered"].forEach(state =>
+    assert.ok(app.includes(`"${state}"`), `app.js never sets the "${state}" voice state`));
+
+  assert.match(app, /dataset\.state\s*=\s*state/,
+    "the top bar must carry the voice state where the stylesheet can show it");
+  assert.match(app, /function answer\(/, "there must be one funnel every answer goes through");
+  assert.match(app, /logTurn\("you"/, "what the cook said must be recorded, not just what was answered");
+  assert.match(app, /function renderConvo\(/, "the panel must render the transcript");
+
+  // The dead end the probe found: chromium accepts start() and emits nothing at
+  // all, so a listening state with no timeout is a screen that lies forever.
+  assert.match(app, /LISTEN_GRACE_MS/, "there must be a timeout for a microphone that never opens");
+  assert.match(app, /LISTEN_LIMIT_MS/, "there must be a timeout for an utterance that never ends");
+  assert.match(app, /RECOGNITION_ERRORS/, "recognition failures must be turned into words");
 });

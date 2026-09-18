@@ -9,9 +9,19 @@
 <body>
   <header id="topbar">
     <h1 class="logo">🍳 CookAlong <span>TV</span></h1>
-    <div id="voice-status" class="voice-status" aria-live="polite">
-      <span class="pulse"></span> <span id="voice-text">Say "Alexa, open CookAlong" — or just use the remote</span>
-      <button id="btn-voice" class="mic" title="Try voice control (browser demo)">
+    <!-- The topbar is the one channel that is always on screen, so the state of
+         the conversation lives here: the dot and the meter are the tell that the
+         app is listening or thinking, and #voice-text carries the live
+         transcript while it listens and the answer when it has one. Before
+         this, the only way to learn what you could say was a list at the very
+         bottom of the home screen, a thousand pixels below a 720p fold. -->
+    <div id="voice-status" class="voice-status" data-state="idle" aria-live="polite">
+      <span class="pulse" id="voice-dot" aria-hidden="true"></span>
+      <span id="voice-meter" class="voice-meter" aria-hidden="true">
+        <i></i><i></i><i></i><i></i><i></i>
+      </span>
+      <span id="voice-text">Press 🎙 and talk — or 💬 to see what you can say</span>
+      <button id="btn-voice" class="mic" title="Talk to this screen (browser speech recognition)">
         <span id="mic-icon">🎙</span><span id="mic-label">Voice</span>
       </button>
       <button id="btn-timer-badge" class="mic timer-badge hidden" title="Timer running — open the cooking screen">
@@ -19,6 +29,9 @@
       </button>
       <button id="btn-shop-badge" class="mic shop-badge" title="Shopping list — what you still need to buy">
         <span id="shop-badge-icon">🛒</span><span id="shop-badge-text">List</span>
+      </button>
+      <button id="btn-convo-badge" class="mic convo-badge" title="What you and CookAlong have said to each other">
+        <span id="convo-badge-icon">💬</span><span id="convo-badge-text">Chat</span>
       </button>
       <button id="btn-mute" class="mic" title="Mute or unmute spoken guidance" aria-pressed="false">
         <span id="mute-icon">🔊</span><span id="mute-label">Voice on</span>
@@ -71,22 +84,16 @@
       <div id="kitchen-results" class="kitchen-results" aria-live="polite"></div>
     </section>
     <section id="recipe-grid" class="grid" aria-label="Recipe list"></section>
+    <!-- Rendered from the command table in src/voice-commands.js, never typed
+         here. The list that used to live in this file had drifted away from the
+         code that answers: it offered "I'm allergic to dairy" and nothing
+         handled it. A hand-written list of what the app understands is a
+         promise nobody checks, so this one is generated and the generator is
+         tested against its own examples. -->
     <aside id="voice-cheatsheet" class="cheatsheet">
       <h4>🎙 Remote &amp; voice</h4>
-      <ul>
-        <li><em>Remote</em> — arrow keys move, OK selects, Back returns</li>
-        <li>"cook <em>tomato basil pasta</em>" — open a recipe</li>
-        <li>"what can I cook with <em>chicken and garlic</em>" — smart match</li>
-        <li>"add what's missing" / "what do I need to buy" — the shopping list</li>
-        <li>"next step" / "previous step"</li>
-        <li>"repeat step"</li>
-        <li>"set a timer" — adds one, so several pots can run at once</li>
-        <li>"what timers are running" / "pause timers"</li>
-        <li>"what's the cook plan" — the longest wait, and what to start first</li>
-        <li>"filter vegan" / "vegetarian" / "gluten-free"</li>
-        <li>"I'm allergic to <em>dairy</em>" — hide recipes that carry it</li>
-      </ul>
-      <p class="cheatsheet-foot">Voice in and out depends on the device — see <em>Device check</em> below.</p>
+      <ul id="cheatsheet-list"></ul>
+      <p class="cheatsheet-foot">Arrow keys move, OK selects, Back returns. Every one of these also works from the remote's Alexa button, and the full list lives behind 💬 in the top bar.</p>
     </aside>
   </main>
   <main id="view-recipe" class="view hidden">
@@ -173,6 +180,32 @@
     <ul id="shop-list" class="shopping-list" aria-live="polite"></ul>
     <p id="shop-empty" class="shopping-empty">Nothing on the list yet. Open a recipe and press “Add what's missing”, or tell me what is in your kitchen.</p>
   </section>
+  <!-- You cannot see what you said on a TV the way you can in a chat window:
+       the transcript was a three-second toast and the answer was a line in the
+       top bar that the next command overwrote. And on a device with no
+       installed voice, the answer was spoken into nothing and never appeared at
+       all — so the cook had no way to tell a misheard word from a broken app.
+       This is that record, and it is global state for the same reason the
+       shopping list is: it spans every screen and outlives the session. -->
+  <section id="conversation-panel" class="modal convo hidden" role="dialog" aria-modal="true" aria-labelledby="convo-title">
+    <div class="modal-box convo-box">
+      <div class="convo-head">
+        <h2 id="convo-title">💬 Our conversation</h2>
+        <div class="convo-actions">
+          <button id="btn-convo-help" class="btn small" aria-expanded="false" aria-controls="convo-help">What can I say?</button>
+          <button id="btn-convo-clear" class="btn small">Clear</button>
+          <button id="btn-convo-close" class="btn primary">Close</button>
+        </div>
+      </div>
+      <p id="convo-summary" class="modal-summary"></p>
+      <ul id="convo-list" class="convo-list" aria-live="polite"></ul>
+      <p id="convo-empty" class="convo-empty">Nothing said yet. Press 🎙 or the remote's Alexa button and ask something — “what can I cook with chicken and garlic”, or “next step” once a recipe is open.</p>
+      <div id="convo-help" class="convo-help hidden">
+        <h3 class="convo-help-title">Say any of these</h3>
+        <ul id="convo-help-list" class="convo-help-list"></ul>
+      </div>
+    </div>
+  </section>
   <footer id="footer">
     <span>CookAlong TV · Amazon Fire TV Web App + Alexa Skills Kit demo</span>
     <button id="btn-selfcheck" class="btn small footer-check">Device check</button>
@@ -208,6 +241,9 @@
   <script src="plan-engine.js"></script>
   <!-- shopping-engine resolves the scaler and the ingredient engine at load time -->
   <script src="shopping-engine.js"></script>
+  <!-- voice-commands-engine is the single table of what can be said; the matcher,
+       the cheatsheet and the help panel all read it, so it must exist before app.js -->
+  <script src="voice-commands-engine.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
