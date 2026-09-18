@@ -286,6 +286,34 @@ const RECIPES = [
   }
 ];
 
+/**
+ * The dishes in the cook's own language.
+ *
+ * Held together so the translations can be read and corrected in one place. The
+ * risk of a separate list is that a new dish arrives without a Chinese name and
+ * becomes unreachable by voice — so a test asserts every recipe has an entry,
+ * which turns that omission into a failing build rather than a silent gap.
+ *
+ * The Chinese name has to be one a cook would actually say out loud, because a
+ * recogniser is what produces it, not a translator.
+ */
+const RECIPE_NAMES_CN = {
+  "tomato-basil-pasta": "番茄罗勒意面",
+  "vegetable-stir-fry": "蔬菜小炒",
+  "garlic-chicken-rice": "蒜香鸡饭",
+  "fluffy-french-toast": "松软法式吐司",
+  "mushroom-risotto": "奶油蘑菇烩饭",
+  "tofu-scramble": "姜黄炒豆腐",
+  "beef-broccoli": "西兰花炒牛肉",
+  "banana-oat-pancakes": "香蕉燕麦松饼",
+  "lemon-garlic-shrimp": "蒜香柠檬虾",
+  "hearty-chicken-soup": "浓香鸡汤",
+};
+
+RECIPES.forEach(recipe => {
+  recipe.nameCn = RECIPE_NAMES_CN[recipe.id] || null;
+});
+
 function listRecipes(diet = null) {
   if (!diet) return RECIPES.map(recipeSummary);
   return RECIPES.filter(r => r.diet.includes(diet)).map(recipeSummary);
@@ -323,4 +351,4 @@ function formatStep(recipe, stepNumber) {
   return `Step ${stepNumber} of ${recipe.steps.length}: ${recipe.steps[stepNumber - 1]}`;
 }
 
-module.exports = { DIETS, RECIPES, listRecipes, getRecipe, findRecipe, formatStep };
+module.exports = { DIETS, RECIPES, RECIPE_NAMES_CN, listRecipes, getRecipe, findRecipe, formatStep };

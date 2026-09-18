@@ -166,6 +166,25 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   while "chicken beef" reads as two — and a run of Chinese, which has neither
   spaces nor commas, is scanned the same way. Saying that list now reaches
   *Tonight, cook Garlic Chicken Rice*, where before it could reach nothing.
+- **It listens in the language you speak** — a recognition session takes exactly
+  one language, so the microphone used to be opened in English no matter what was
+  said into it. A Chinese-speaking cook was therefore not *partly* understood,
+  they were not understood at all, and every phrase the screen taught them was a
+  phrase that could not work. The microphone now opens in the browser's own
+  language, the command table answers in both, and **💬 → 🎙** switches between
+  them — taking the taught list with it, because teaching English phrases to a
+  Chinese microphone is how a working feature looks broken. Every command carries
+  its Chinese phrase, its Chinese description, and Chinese examples that are
+  tested the same way the English ones are.
+- **The microphone is closed before the app speaks** — the app used to give up on
+  a microphone that never opened by forgetting the recogniser rather than closing
+  it. The recogniser kept running, kept returning results, and each result was
+  answered *out loud* — into the microphone that was still open. It heard its own
+  answer, treated it as a command, and answered again: in a 14-second
+  reproduction it spoke **65 times** and was still going. Both give-up paths now
+  close the microphone, a finished session refuses further results, and `speak()`
+  closes the microphone before it says anything — so no future call path can
+  reach the same loop.
 
 ## What's inside
 
@@ -222,7 +241,7 @@ npm run check:web    # verify they match src/ (also runs before npm test and in 
 
 ```bash
 npm install --prefix skill   # once: the skill integration tests need ask-sdk-core
-npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 285 tests
+npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 289 tests
 ```
 
 Two of those tests exist to catch drift rather than logic, because both places
@@ -274,7 +293,7 @@ the parts a person would actually notice are checked in a real browser, on deman
 
 ```bash
 npm start                 # terminal 1 — serves public/ on :8080
-npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 55 checks
+npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 61 checks
 ```
 
 It presses the real buttons and reads the real DOM: the panel lists and ticks, the

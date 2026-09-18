@@ -46,7 +46,7 @@ test("every command's own example is answered by that same command", () => {
 });
 
 test("every command is reachable on the screen it is scoped to", () => {
-  const scopes = Object.keys(VC.SCOPE_LABEL);
+  const scopes = VC.SCOPES;
   VC.COMMANDS.forEach(command => {
     assert.ok(scopes.includes(command.scope),
       `${command.id} has scope "${command.scope}", which no label covers`);
@@ -125,12 +125,68 @@ test("the help screen lists every command, with a label for every scope used", (
   const listed = VC.help();
   assert.strictEqual(listed.length, VC.COMMANDS.length);
   listed.forEach(row => {
-    assert.ok(VC.SCOPE_LABEL[row.scope], `${row.id} is listed under a scope with no label`);
+    assert.ok(VC.SCOPE_LABEL.en[row.scope], `${row.id} is listed under a scope with no label`);
     assert.ok(row.say && row.help);
   });
   // The home-scoped command is the one a first-time cook needs, so it has to be
   // in the list the help screen renders.
   assert.ok(listed.some(r => r.id === "open-recipe"));
+});
+
+test("every command is taught in Chinese, and in a Chinese that actually works", () => {
+  const inCn = VC.help("zh-CN");
+  assert.strictEqual(inCn.length, VC.COMMANDS.length);
+
+  VC.COMMANDS.forEach((command, index) => {
+    assert.ok(command.cn, `${command.id} has no Chinese form, so it is unusable in Chinese`);
+    assert.ok(command.cn.say && command.cn.help,
+      `${command.id} has no Chinese phrase or description to teach`);
+
+    // The same promise the English table makes, made in Chinese: a phrase the
+    // app teaches has to be a phrase the app answers. A Chinese speaker is
+    // handed these, and a list that lies is worse than no list.
+    const taught = [command.cn.say].concat(command.cn.samples || []);
+    taught.forEach(phrase => {
+      assert.strictEqual(matchId(phrase), command.id,
+        `"${phrase}" is taught by ${command.id} in Chinese but reaches ${matchId(phrase)}`);
+    });
+
+    // And the rendered list must show the Chinese, not the English.
+    assert.strictEqual(inCn[index].say, command.cn.say,
+      `${command.id} is still advertised in English on a Chinese help screen`);
+    assert.ok(!/[a-z]{3}/i.test(inCn[index].say) || /[一-龥]/.test(inCn[index].say),
+      `${command.id} teaches a Chinese phrase with no Chinese in it`);
+  });
+
+  // Every Chinese phrase has to be distinct, or one silently shadows another.
+  const seen = new Set();
+  VC.COMMANDS.forEach(c => {
+    const key = VC.normalize(c.cn.say);
+    assert.ok(!seen.has(key), `two commands both teach the Chinese phrase "${c.cn.say}"`);
+    seen.add(key);
+  });
+});
+
+test("the scope labels are translated, not left in English", () => {
+  VC.SCOPES.forEach(scope => {
+    assert.ok(VC.SCOPE_LABEL.en[scope], `${scope} has no English label`);
+    assert.ok(VC.SCOPE_LABEL.zh[scope], `${scope} has no Chinese label`);
+    assert.strictEqual(VC.scopeLabel(scope, "zh-CN"), VC.SCOPE_LABEL.zh[scope]);
+    assert.strictEqual(VC.scopeLabel(scope, "en-US"), VC.SCOPE_LABEL.en[scope]);
+  });
+  assert.ok(/[一-龥]/.test(VC.scopeLabel("always", "zh")));
+  assert.ok(!/[一-龥]/.test(VC.scopeLabel("always", "en")));
+});
+
+test("every allergen the engine knows can be said in Chinese", () => {
+  // The canonical names come from the ingredient engine; the spoken forms live
+  // in the voice table. This is the guard that keeps the two in step — an
+  // allergen added to the engine without a Chinese word would be silent.
+  COMMON_ALLERGENS.forEach(allergen => {
+    assert.ok(VC.ALLERGEN_CN[allergen],
+      `${allergen} has no Chinese spoken form, so it cannot be declared by voice`);
+    assert.ok(VC.ALLERGEN_CN[allergen].length, `${allergen} has an empty Chinese form`);
+  });
 });
 
 test("an utterance is matched the way a recogniser delivers it, not the way it is typed", () => {

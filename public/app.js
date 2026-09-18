@@ -1087,6 +1087,99 @@
   const VOICE_LOG_KEY = "cookalong.voice-log.v1";
   const VOICE_LOG_MAX = 40;
 
+  /* The language the microphone listens in — and the language the app teaches
+   * in, because those have to be the same one.
+   *
+   * A recognition session takes exactly one language, so "understand Chinese and
+   * English" cannot mean one microphone set to both: a Chinese speaker whose
+   * recogniser is set to en-US is not partially understood, they are not
+   * understood at all, and every phrase they are shown is a phrase that cannot
+   * work. The default follows the browser, and the cook can change it.
+   */
+  const VOICE_LANG_KEY = "cookalong.voice-lang.v1";
+  let voiceLang = "en-US";
+
+  function knownLangs() { return (VOICE && VOICE.LANGS) || []; }
+
+  function langSupported(id) { return knownLangs().some(l => l.id === id); }
+
+  /** Chinese if the browser says so, English otherwise. */
+  function defaultVoiceLang() {
+    const nav = String((navigator && navigator.language) || "");
+    return /^zh/i.test(nav) ? "zh-CN" : "en-US";
+  }
+
+  function loadVoiceLang() {
+    let saved = null;
+    try { saved = localStorage.getItem(VOICE_LANG_KEY); } catch (e) { /* private mode */ }
+    voiceLang = langSupported(saved) ? saved : defaultVoiceLang();
+    if (!langSupported(voiceLang)) voiceLang = "en-US";
+    return voiceLang;
+  }
+
+  function saveVoiceLang() {
+    try { localStorage.setItem(VOICE_LANG_KEY, voiceLang); } catch (e) { /* private mode */ }
+  }
+
+  function isChinese() { return /^zh/i.test(voiceLang); }
+
+  function langLabel(id) {
+    const found = knownLangs().find(l => l.id === id);
+    return found ? found.label : id;
+  }
+
+  /**
+   * A short phrase to suggest while the microphone is open.
+   *
+   * Taken from the command table in the cook's own language, so the example the
+   * screen offers is one the recogniser can actually return — suggesting the
+   * English passphrase to someone whose microphone is listening for Chinese is
+   * how a working feature looks broken.
+   */
+  function examplePhrase() {
+    const preferred = isChinese() ? "下一步" : "next step";
+    if (!VOICE) return preferred;
+    const rows = VOICE.help(voiceLang);
+    const listed = rows.map(r => r.say).find(say => say && say.replace(/[“”\s]/g, "") === preferred);
+    return listed || preferred;
+  }
+
+  /**
+   * Switch the microphone between the languages the table answers in, and take
+   * everything that teaches or listens with it: the two command lists, the
+   * resting line, and — next time it opens — the recogniser.
+   */
+  function applyVoiceLang() {
+    const label = langLabel(voiceLang);
+    const btn = $("btn-convo-lang");
+    if (btn) {
+      btn.textContent = `🎙 ${label}`;
+      btn.setAttribute("aria-label", `Microphone language: ${label}. Activate to switch.`);
+      btn.setAttribute("aria-pressed", String(isChinese()));
+      btn.classList.toggle("active", isChinese());
+    }
+    renderCommandList($("cheatsheet-list"));
+    renderCommandList($("convo-help-list"));
+    setDefaultVoiceStatus();
+  }
+
+  function cycleVoiceLang() {
+    const langs = knownLangs();
+    if (!langs.length) return;
+    const at = langs.findIndex(l => l.id === voiceLang);
+    voiceLang = langs[(at + 1) % langs.length].id;
+    saveVoiceLang();
+    // The answer is about the microphone, so it goes through the same funnel as
+    // every other answer: spoken, on the top bar, and written down.
+    answer({
+      status: `Listening in ${langLabel(voiceLang)}`,
+      say: `Listening in ${langLabel(voiceLang)}. ${isChinese()
+        ? "你可以说“下一步”或者“冰箱里有鸡蛋”。"
+        : "You can say “next step”, or name what is in your kitchen."}`,
+    });
+    applyVoiceLang();
+  }
+
   /* A browser can expose SpeechRecognition, accept start(), and then emit
    * nothing whatsoever: no start event, no result, no error. Chromium does
    * exactly that when it cannot reach a speech service, and the old code
@@ -1286,13 +1379,13 @@
     if (!target) return;
     target.innerHTML = "";
     if (!VOICE) return;
-    const rows = VOICE.help();
-    Object.keys(VOICE.SCOPE_LABEL).forEach(scope => {
+    const rows = VOICE.help(voiceLang);
+    (VOICE.SCOPES || Object.keys(VOICE.SCOPE_LABEL.en)).forEach(scope => {
       const group = rows.filter(row => row.scope === scope);
       if (!group.length) return;
       const head = document.createElement("li");
       head.className = "cmd-scope";
-      head.textContent = VOICE.SCOPE_LABEL[scope];
+      head.textContent = VOICE.scopeLabel(scope, voiceLang);
       target.appendChild(head);
       group.forEach(row => {
         const li = document.createElement("li");
@@ -1450,6 +1543,9 @@
     const canListen = !!(capSummary && capSummary.canListen);
     const spoken = !!(capSummary && capSummary.spokenPrimary);
     if (canListen) {
+      // The line names the language the microphone is in, because that is the
+      // one setting a cook cannot see the effect of until it is too late.
+      if (isChinese()) return "🎙 中文 — 说“下一步”，或按 💬 看能说什么";
       return spoken
         ? "Press 🎙 and talk — or 💬 to see what you can say"
         : "Press 🎙 and talk — answers stay on screen here";
@@ -1916,7 +2012,10 @@
     voiceRecognition = recognition;
     voiceSession = { final: "", interim: "", handled: false, live: false };
 
-    recognition.lang = "en-US";
+    // The cook's language, not a hard-coded one. This was the whole reason a
+    // Chinese speaker was never understood: the microphone was listening for
+    // English no matter what was said into it.
+    recognition.lang = voiceLang;
     // The cook asked to see themselves talking. interimResults is what puts the
     // words on screen while they are still being said; without it the line reads
     // "Listening…" and stays that way until the whole sentence is over, which is
@@ -2027,7 +2126,7 @@
     }
 
     voiceListening = true;
-    setVoiceState("listening", "Listening… say something like “next step”");
+    setVoiceState("listening", `Listening${isChinese() ? " (中文)" : ""}… say something like “${examplePhrase()}”`);
     armVoiceWatchdog(LISTEN_GRACE_MS, onDeaf);
 
     try {
@@ -3008,6 +3107,7 @@
     if (reply) answer(reply);
   });
   $("btn-convo-badge").addEventListener("click", openConvo);
+  $("btn-convo-lang").addEventListener("click", cycleVoiceLang);
   $("btn-convo-close").addEventListener("click", closeConvo);
   $("btn-convo-clear").addEventListener("click", clearConvo);
   $("btn-convo-help").addEventListener("click", toggleConvoHelp);
@@ -3121,6 +3221,9 @@
     // The conversation outlives the session the same way the shopping list
     // does: a cook who walks away mid-answer should be able to come back and
     // read what was said.
+    // The language has to be known before anything is rendered or listened for:
+    // it decides which phrases are taught and which one the recogniser opens in.
+    loadVoiceLang();
     loadVoiceLog();
     renderConvo();
     renderConvoBadge();
@@ -3128,6 +3231,7 @@
     // there is no hand-written list left to drift away from the matcher.
     renderCommandList($("cheatsheet-list"));
     renderCommandList($("convo-help-list"));
+    applyVoiceLang();
 
     restVoice();
 

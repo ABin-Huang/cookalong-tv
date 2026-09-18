@@ -395,12 +395,85 @@ speak a command" and left it there indefinitely. So every way a listen can end
 now ends in words: a result, a named error translated into the cook's language,
 a grace timeout for a microphone that never opened, a limit timeout for an
 utterance that never finishes, or a natural end with nothing heard. The two
-timeout paths clear the recognition themselves rather than waiting for `end`,
-because `end` is exactly the event this browser does not send — and a path that
-waits for it leaves a control that believes a session is still running, which
-makes the next tap a stop request and the microphone dead for the rest of the
-cook. The browser harness drives a real recogniser where there is one and stands
-in for one where there is not, then asserts that no path ends in silence.
+timeout paths **close the microphone** rather than waiting for `end`, because
+`end` is exactly the event this browser does not send — and a path that waits for
+it leaves a control that believes a session is still running, which makes the next
+tap a stop request and the microphone dead for the rest of the cook. The browser
+harness drives a real recogniser where there is one and stands in for one where
+there is not, then asserts that no path ends in silence.
+
+## The microphone is closed before the app speaks
+
+The app's worst bug came out of a report that sounded like a nuisance: *"I press a
+button, it speaks, and then it repeats forever."* It was a feedback loop with the
+microphone as the wire.
+
+Giving up on a microphone used to mean forgetting the recogniser, not closing it.
+The two give-up paths — no events at all, and an utterance that runs past the
+limit — nulled the app's reference and said so out loud, and the recogniser they
+had abandoned kept running. It kept returning results. Each result was a command,
+each command was answered *out loud*, and the microphone heard the answer through
+the speakers and did it again. Measured in the browser harness against the code
+before the fix: **one utterance to start it, then 65 spoken lines in 14 seconds**
+and still counting, with the transcript filled to its 40-turn cap.
+
+Three guards now close that door, in order of how much they rely on nothing else
+being right:
+
+1. **Giving up closes the microphone.** Both give-up paths call the same
+   `stopVoiceRecognition()` a deliberate stop does, which `abort()`s rather than
+   `stop()`s — a graceful stop flushes one last result, and that result arrives
+   *after* the app has decided what to say.
+2. **A finished session refuses further results.** `onresult` returns early once
+   the session is `handled`, so a late result cannot be answered as a new command
+   even if something above it goes wrong.
+3. **`speak()` closes the microphone first.** The app never talks with a
+   microphone open, whatever path decided to talk. This is the one that makes the
+   class of bug unreachable rather than merely fixed — including for code that
+   does not exist yet.
+
+The harness check drives a recogniser that stays silent long enough for the grace
+timeout, then keeps emitting results forever, and asserts that exactly one line
+is spoken and that the recogniser was aborted rather than abandoned.
+
+## It listens in the language the cook speaks
+
+`SpeechRecognition` takes exactly **one** language per session. So "understand
+Chinese and English" cannot be satisfied by one microphone set to both, and the
+original hard-coded `recognition.lang = "en-US"` did not mean a Chinese-speaking
+cook was partially understood — it meant they were not understood at all, while
+the screen taught them English phrases they had no way to say.
+
+The language therefore had to become state, in one place, and everything that
+either listens or teaches had to read from it:
+
+- **The default follows the browser** (`navigator.language`), because that is the
+  best available guess about the person holding the remote, and it means a Chinese
+  cook is understood on first use without going looking for a setting.
+- **The command table answers in both.** Every entry carries `cn: { say, help,
+  samples }` and Chinese patterns inside the same `match`, so the phrase taught,
+  the phrase recognised, and the phrase tested stay one fact. Two tables would
+  have drifted the moment either was edited — which is the entire lesson of the
+  section above it.
+- **The switch takes the teaching with it.** Changing the language re-renders
+  both command lists and the resting line, because a Chinese microphone with an
+  English cheatsheet is the same lie as an advertised command with no handler.
+- **The recipes carry Chinese names.** The dish command matches the whole name,
+  so without them "cook tomato basil pasta" would have had no Chinese equivalent —
+  the headline command, unreachable in the language the cook chose. They live in
+  one map with a test asserting every recipe has an entry, so a new dish cannot
+  silently become nameless.
+- **Command vocabulary is Chinese even when the answer is English.** The
+  catalogue, the steps and the replies are English, so the app answers in English
+  while being *driven* in either language — which is coherent with what is on
+  screen. That boundary is deliberate, not an oversight.
+
+The harness asserts the rule rather than the value: the microphone opens in the
+language the button shows, switching changes the taught list in the same breath,
+and a phrase spoken in Chinese moves the step on screen and is written into the
+transcript as what was said. The taught-list checks compare against the table *in
+the page's current language*, so they test the app rather than the machine's
+locale.
 
 ## AWS deployment (hackathon target)
 

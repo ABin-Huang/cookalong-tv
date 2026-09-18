@@ -392,8 +392,12 @@ const record = (name, pass, detail) => {
       if (!window.__realRecognition) {
         window.__realRecognition = window.SpeechRecognition || null;
       }
+      window.__lastMicLang = null;
       window.SpeechRecognition = class {
         start() {
+          // Recorded, not assumed: the language the app opens the microphone
+          // with is the whole of "does it understand me or not".
+          window.__lastMicLang = this.lang;
           const results = [[{ transcript: text }]];
           results[0].isFinal = true;
           setTimeout(() => {
@@ -621,6 +625,70 @@ const record = (name, pass, detail) => {
   await page.click("#btn-back");
   await page.waitForTimeout(300);
 
+  // --- the language the microphone listens in -------------------------------
+
+  // "I might speak Chinese or English" is not a nicety. A recognition session
+  // takes exactly one language, so a microphone opened in the wrong one does not
+  // half-understand the cook — it does not understand them at all, and every
+  // phrase the app then teaches is a phrase that cannot work. Language and
+  // taught list are checked together for that reason.
+  const sortJoin = list => [...list].sort().join("|");
+  const readLang = () => page.evaluate(() => {
+    const eng = window.CookalongVoiceCommands;
+    const label = document.getElementById("btn-convo-lang").textContent.replace(/^🎙\s*/, "").trim();
+    const found = eng.LANGS.find(l => l.label === label) || {};
+    return {
+      id: found.id || null,
+      label,
+      nav: navigator.language,
+      taught: [...document.querySelectorAll("#cheatsheet-list .cmd-say")]
+        .map(e => e.textContent.replace(/[“”]/g, "")),
+    };
+  });
+
+  const started = await readLang();
+  const wantsCn = /^zh/i.test(started.nav);
+  record("the microphone starts in the browser's own language, not a fixed one",
+    started.id === (wantsCn ? "zh-CN" : "en-US"),
+    `navigator.language=${started.nav} -> ${started.id} (${started.label})`);
+
+  const other = wantsCn ? "en-US" : "zh-CN";
+  await page.click("#btn-convo-badge");
+  await page.waitForTimeout(300);
+  await page.click("#btn-convo-lang");
+  await page.waitForTimeout(500);
+  const switched = await readLang();
+  const taughtInOther = await page.evaluate(
+    id => window.CookalongVoiceCommands.help(id).map(r => r.say), other);
+  record("switching the language takes the taught list with it, in the same breath",
+    switched.id === other &&
+      switched.taught.length === taughtInOther.length &&
+      sortJoin(switched.taught) === sortJoin(taughtInOther),
+    `${started.label} -> ${switched.label}, ${switched.taught.length} phrases taught`);
+  await page.click("#btn-convo-close");
+  await page.waitForTimeout(300);
+
+  await openRecipe("tomato-basil-pasta");
+  await say("next step");
+  const openedLang = await page.evaluate(() => window.__lastMicLang);
+  record("the microphone opens in the language the cook chose, not the default",
+    openedLang === other, `recognition.lang=${openedLang}, wanted ${other}`);
+
+  // A phrase the app teaches in Chinese has to be a phrase the app acts on —
+  // spoken, matched, and recorded as what was said.
+  const beforeCn = await page.evaluate(() => document.getElementById("step-label").textContent);
+  await say("下一步");
+  const afterCn = await page.evaluate(() => ({
+    label: document.getElementById("step-label").textContent,
+    log: JSON.parse(localStorage.getItem("cookalong.voice-log.v1") || "[]").slice(-2),
+  }));
+  record("a command spoken in Chinese moves the app, and is recorded as said",
+    afterCn.label !== beforeCn &&
+      afterCn.log.some(t => t.who === "you" && t.text === "下一步"),
+    `${beforeCn} -> ${afterCn.label}`);
+  await page.click("#btn-back");
+  await page.waitForTimeout(300);
+
   // --- the conversation panel ----------------------------------------------
 
   const badge = await page.evaluate(() => ({
@@ -656,12 +724,21 @@ const record = (name, pass, detail) => {
   await page.waitForTimeout(300);
   const help = await page.evaluate(() => {
     const eng = window.CookalongVoiceCommands;
-    const table = eng ? eng.help() : [];
+    if (!eng) return { taught: [], shown: [], sheet: [], scopes: [], lang: "en-US" };
+    // Compare against the table in the language the page is actually showing.
+    // The app picks its language from the browser, so asserting the English list
+    // would make this check pass or fail on the machine's locale rather than on
+    // the app — and the thing being checked is that the screen matches the
+    // table, whichever language that table is in.
+    const label = (document.getElementById("btn-convo-lang") || {}).textContent || "";
+    const lang = (eng.LANGS.find(l => l.label === label.replace(/^🎙\s*/, "").trim()) || {}).id || "en-US";
+    const table = eng.help(lang);
     const shown = [...document.querySelectorAll("#convo-help-list .cmd-row .cmd-say")]
       .map(el => el.textContent.replace(/[“”]/g, ""));
     const sheet = [...document.querySelectorAll("#cheatsheet-list .cmd-row .cmd-say")]
       .map(el => el.textContent.replace(/[“”]/g, ""));
     return {
+      lang,
       taught: table.map(r => r.say),
       shown,
       sheet,
@@ -674,10 +751,10 @@ const record = (name, pass, detail) => {
   const sorted = list => [...list].sort().join("|");
   record("the help list on screen is the command table, not a copy of it",
     help.shown.length === help.taught.length && sorted(help.shown) === sorted(help.taught),
-    `${help.shown.length} shown of ${help.taught.length} in the table`);
+    `${help.shown.length} shown of ${help.taught.length} in the table (${help.lang})`);
   record("the home-screen cheatsheet renders the same table",
     help.sheet.length === help.taught.length && sorted(help.sheet) === sorted(help.taught),
-    `${help.sheet.length} rendered of ${help.taught.length}`);
+    `${help.sheet.length} rendered of ${help.taught.length} (${help.lang})`);
   record("the list is grouped by where each command works",
     help.scopes.length >= 2, help.scopes.join(" / "));
 

@@ -44,3 +44,16 @@ test("findRecipe matches by display name (Alexa slot format)", () => {
   assert.strictEqual(findRecipe("sushi"), null);
   assert.strictEqual(findRecipe(""), null);
 });
+
+test("every dish has a Chinese name, so it stays reachable by voice in Chinese", () => {
+  // The Chinese names live in one list so they can be read together. The cost of
+  // that is a dish arriving without one and becoming silently unreachable to a
+  // Chinese speaker — so the omission has to fail here instead.
+  RECIPES.forEach(recipe => {
+    assert.ok(recipe.nameCn, `${recipe.id} has no Chinese name`);
+    assert.ok(/[\u4e00-\u9fff]/.test(recipe.nameCn),
+      `${recipe.id} has a Chinese name with no Chinese in it: "${recipe.nameCn}"`);
+  });
+  const names = RECIPES.map(r => r.nameCn);
+  assert.strictEqual(new Set(names).size, names.length, "two dishes share a Chinese name");
+});
