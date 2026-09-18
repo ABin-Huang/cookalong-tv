@@ -519,6 +519,55 @@ const record = (name, pass, detail) => {
     closedByTap === "idle", `state="${closedByTap}"`);
   await restoreRealMic();
 
+  // --- giving up must close the microphone ----------------------------------
+
+  // The worst bug this feature has had, and the one place it is checkable. A
+  // recogniser that never opens is what this browser really produces, so the app
+  // gives up and says so. If it only forgets the recogniser instead of closing
+  // it, the microphone stays live: it keeps returning results, each result is
+  // answered *out loud*, and the microphone hears that answer through the
+  // speakers and asks again. Before the fix this spoke 65 times in 14 seconds
+  // and was still going.
+  //
+  // Only `SpeechRecognition` is replaced, never `webkitSpeechRecognition`, so
+  // that the fake cannot leak into the checks that follow through the fallback
+  // the app prefers.
+  await page.evaluate(() => {
+    window.__spoken = [];
+    window.speechSynthesis.speak = u => window.__spoken.push(String(u && u.text));
+    window.__loopMic = { aborted: 0, stopped: 0, emitted: 0 };
+    window.SpeechRecognition = class {
+      start() {
+        // Silent: no start event at all, so the grace watchdog is what ends it.
+        this.__timer = setTimeout(() => this.creep(), 4000);
+      }
+      creep() {
+        if (this.__dead) return;
+        window.__loopMic.emitted += 1;
+        const results = [[{ transcript: "next step" }]];
+        results[0].isFinal = true;
+        if (this.onresult) this.onresult({ resultIndex: 0, results });
+        this.__timer = setTimeout(() => this.creep(), 150);
+      }
+      stop() { window.__loopMic.stopped += 1; this.__dead = true; clearTimeout(this.__timer); }
+      abort() { window.__loopMic.aborted += 1; this.__dead = true; clearTimeout(this.__timer); }
+    };
+  });
+  await page.click("#btn-voice");
+  await page.waitForTimeout(6000);   // past LISTEN_GRACE_MS, then into the creep
+  const loop = await page.evaluate(() => ({
+    mic: window.__loopMic,
+    spoken: window.__spoken.slice(),
+    state: document.getElementById("voice-status").dataset.state,
+  }));
+  record("a microphone the app has given up on is closed, not merely forgotten",
+    loop.mic.aborted > 0 && loop.mic.emitted === 0,
+    `aborted=${loop.mic.aborted} emitted=${loop.mic.emitted}`);
+  record("and it does not answer itself over and over through that microphone",
+    loop.spoken.length <= 1 && loop.state !== "listening",
+    `${loop.spoken.length} spoken, state=${loop.state}: ${JSON.stringify(loop.spoken.slice(0, 2))}`);
+  await restoreRealMic();
+
   // --- the spoken path, driven end to end ----------------------------------
 
   // The headline regression: this exact phrase was printed in the cheatsheet and

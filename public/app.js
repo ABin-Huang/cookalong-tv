@@ -1038,6 +1038,12 @@
       return;
     }
     if (!window.speechSynthesis) return;
+    // Never talk with the microphone open. The recogniser can hear the answer
+    // through the speakers, treat it as a new command, and get answered again —
+    // an app that argues with itself for the rest of the cook. Closing the
+    // microphone here makes that structurally impossible, whatever path
+    // decided to speak.
+    if (voiceRecognition) stopVoiceRecognition();
     if (interrupt) window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
     utter.lang = "en-US"; utter.rate = 0.98;
@@ -1850,9 +1856,21 @@
     },
   };
 
+  /**
+   * Close the microphone, and mean it.
+   *
+   * `abort()` rather than `stop()`: a graceful stop flushes one last result,
+   * and that result arrives *after* the app has already decided what to say —
+   * so the app answers its own sentence through the microphone it is still
+   * holding open. The reference is cleared first for the same reason: nothing
+   * downstream may act on a session that is already over.
+   */
   function stopVoiceRecognition() {
-    if (!voiceRecognition) return;
-    try { voiceRecognition.stop(); } catch (e) { /* already stopped */ }
+    const recognition = voiceRecognition;
+    if (!recognition) return;
+    voiceRecognition = null;
+    voiceListening = false;
+    try { recognition.abort(); } catch (e) { /* already closed */ }
   }
 
   /**
@@ -1921,6 +1939,11 @@
     recognition.onsoundstart = onLive;
 
     recognition.onresult = event => {
+      // A session that has already been answered, given up on, or stopped must
+      // not answer again. Without this the recogniser's late results are treated
+      // as new commands, each one answered out loud into the microphone that is
+      // still open — and the app spends the rest of the cook talking to itself.
+      if (!voiceSession || voiceSession.handled) return;
       onLive();
       let interim = "";
       for (let i = event.resultIndex; i < event.results.length; i += 1) {
@@ -1937,8 +1960,13 @@
 
     recognition.onerror = event => {
       const code = (event && event.error) || "unknown";
-      // Tapping the microphone again to stop it is not a failure to report.
-      if (code === "aborted") { restVoice(); return; }
+      // Tapping the microphone again to stop it is not a failure to report —
+      // and neither is the `aborted` we raise ourselves when closing the
+      // microphone, which arrives after the answer is already being given.
+      if (code === "aborted") {
+        if (!voiceSession || !voiceSession.handled) restVoice();
+        return;
+      }
       if (voiceSession) voiceSession.handled = true;
       const line = RECOGNITION_ERRORS[code] || `This browser's speech recogniser failed (${code}).`;
       answer({
@@ -1970,12 +1998,12 @@
     function onTooLong() {
       if (!voiceSession || voiceSession.handled) return;
       voiceSession.handled = true;
-      // The end event may never come — that is the same failure the grace period
-      // covers — so this path has to clear the recognition itself. Leaving it set
-      // would make the next tap a request to stop a session that is already over,
-      // and the microphone button would be dead for the rest of the cook.
-      voiceRecognition = null;
-      voiceListening = false;
+      // Giving up has to close the microphone, not just forget it. This path
+      // used to clear the reference and walk away, which left the recogniser
+      // running: it kept producing results, each result was answered out loud,
+      // and the microphone heard the answer and asked again. That is the loop
+      // a cook hears as "it repeats forever".
+      stopVoiceRecognition();
       answer({
         state: "error",
         status: "That took too long — I stopped listening",
@@ -1987,8 +2015,9 @@
     function onDeaf() {
       if (!voiceSession || voiceSession.handled) return;
       voiceSession.handled = true;
-      voiceRecognition = null;
-      voiceListening = false;
+      // Same reason as the timeout above: an abandoned recogniser is a live
+      // microphone, and a live microphone with a talking app is a feedback loop.
+      stopVoiceRecognition();
       answer({
         state: "error",
         status: "No microphone is coming through",
