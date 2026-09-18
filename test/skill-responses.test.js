@@ -283,3 +283,90 @@ test("buildNextMatch without prior ingredients prompts for them", () => {
   const out = R.buildNextMatch(freshState());
   assert.ok(/ingredients first/i.test(out.speech));
 });
+
+/* ----------------------------- no shopping ------------------------------ */
+
+const { readyNow, matchRecipes, suggest } = require("../src/ingredients");
+const { RECIPES } = require("../src/recipes");
+
+const FULL_KITCHEN = ["chicken", "beef", "rice", "pasta", "tomato", "onion", "garlic", "carrot", "potato"];
+const STOCKED_FOR_PASTA = ["pasta", "tomato", "garlic", "basil"];
+
+test("buildWhatDoIHave answers with the dish, not with a percentage", () => {
+  // The spoken answer used to open "Best match: X, 94 percent match", which is a
+  // score. Someone standing at a hob with their hands full needs the dish first.
+  const out = R.buildWhatDoIHave(FULL_KITCHEN.join(", "), freshState());
+  assert.ok(out.speech.startsWith("<speak>Tonight, cook "), `expected the dish first: ${out.speech}`);
+  assert.match(out.speech, /Nothing essential is missing|You have everything/);
+});
+
+test("buildWhatDoIHave never announces a dish that still needs a shop", () => {
+  // The panel is allowed to list a long shot; the sentence is not allowed to
+  // recommend one. suggest() only names a dish with no hard miss, so with only
+  // salt and pepper there is no decision to announce.
+  const out = R.buildWhatDoIHave("salt, pepper", freshState());
+  assert.doesNotMatch(out.speech, /Tonight, cook/, `it announced a decision it cannot back: ${out.speech}`);
+  assert.match(out.speech, /best match/i, "it should still name the closest dish");
+});
+
+test("a dish short of both kinds says both, and a swap never stands in for a miss", () => {
+  // Lemon Garlic Shrimp with only salt and pepper has swappable items (shrimp,
+  // lemon, butter) AND hard misses (garlic, scallion, rice). The sentence used to
+  // report only the first group — "you are missing shrimp, lemon and butter, but
+  // each one has a swap" — and a cook who believed it found three more things to
+  // buy. Both halves are said now.
+  const out = R.buildWhatDoIHave("salt, pepper", freshState());
+  assert.match(out.speech, /still need to buy/i, `the hard misses must be said: ${out.speech}`);
+  assert.match(out.speech, /garlic/);
+  assert.match(out.speech, /rice/);
+});
+
+test("buildReadyNow asks for the kitchen rather than guessing it", () => {
+  // Same rule as the shopping list: an assumed kitchen is how you send someone
+  // out to buy what they already have.
+  const out = R.buildReadyNow(freshState());
+  assert.match(out.speech, /don't know what is in your kitchen/i);
+  assert.ok(out.reprompt);
+});
+
+test("buildReadyNow lists exactly the dishes the engine says need nothing bought", () => {
+  const s = freshState({ lastHaves: STOCKED_FOR_PASTA });
+  const out = R.buildReadyNow(s);
+  const expected = readyNow(matchRecipes(STOCKED_FOR_PASTA, RECIPES));
+  assert.ok(expected.length >= 1, "this kitchen must be stocked for at least one dish");
+  expected.slice(0, 3).forEach(m => assert.ok(out.speech.includes(m.recipe.name),
+    `${m.recipe.name} needs nothing bought but was not spoken: ${out.speech}`));
+  assert.deepStrictEqual(s.matchIds, expected.slice(0, 3).map(m => m.recipe.id));
+  assert.strictEqual(out.document, R.APL.matchResults);
+});
+
+test("buildReadyNow does not call a one-swap dish 'nothing bought'", () => {
+  // The distinction the feature exists for. A full-ish kitchen still leaves every
+  // dish short of something, so the honest answer is "nothing is fully stocked"
+  // plus the dish that is one swap away — not a claim that no shopping is needed.
+  assert.strictEqual(readyNow(matchRecipes(FULL_KITCHEN, RECIPES)).length, 0,
+    "this kitchen must not be strictly stocked, or the test proves nothing");
+  const out = R.buildReadyNow(freshState({ lastHaves: FULL_KITCHEN }));
+  assert.match(out.speech, /nothing is fully stocked/i);
+  assert.doesNotMatch(out.speech, /nothing bought/i,
+    "a swap is still a decision and usually a purchase");
+  const pick = suggest(matchRecipes(FULL_KITCHEN, RECIPES)).pick.recipe.name;
+  assert.ok(out.speech.includes(pick), `expected the one-swap dish ${pick} in: ${out.speech}`);
+});
+
+test("buildReadyNow leaves 'cook it' pointing at the dish it just recommended", () => {
+  // Otherwise the natural follow-up to a recommendation is a dead end.
+  const s = freshState({ lastHaves: FULL_KITCHEN });
+  R.buildReadyNow(s);
+  const pick = suggest(matchRecipes(FULL_KITCHEN, RECIPES)).pick;
+  assert.deepStrictEqual(s.matchIds, [pick.recipe.id]);
+  const started = R.buildStartCooking("it", s);
+  assert.ok(started.speech.includes(pick.recipe.name), `"cook it" started the wrong dish: ${started.speech}`);
+});
+
+test("buildReadyNow says so plainly when nothing can be cooked without a shop", () => {
+  const out = R.buildReadyNow(freshState({ lastHaves: ["salt", "black-pepper"] }));
+  assert.match(out.speech, /nothing here can be cooked without a shop/i);
+  assert.match(out.speech, /the closest is/i, "and it still names what is closest");
+  assert.match(out.speech, /what do I need to buy/i, "and offers the useful next move");
+});

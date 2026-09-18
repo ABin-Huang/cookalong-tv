@@ -114,6 +114,9 @@ const WhatDoIHaveIntentHandler = intentHandler("WhatDoIHaveIntent", handlerInput
 const NextMatchIntentHandler = intentHandler("NextMatchIntent", handlerInput =>
   respond(handlerInput, R.buildNextMatch(state(handlerInput))));
 
+const ReadyNowIntentHandler = intentHandler("ReadyNowIntent", handlerInput =>
+  respond(handlerInput, R.buildReadyNow(state(handlerInput))));
+
 const SubstituteIntentHandler = intentHandler("SubstituteIntent", handlerInput => {
   const s = state(handlerInput);
   const out = R.buildSubstitute(slot(handlerInput, "ingredient"), s);
@@ -271,6 +274,7 @@ exports.handler = Alexa.SkillBuilders.custom()
     ClearShoppingListIntentHandler,
     WhatDoIHaveIntentHandler,
     NextMatchIntentHandler,
+    ReadyNowIntentHandler,
     SubstituteIntentHandler,
     ExcludeIngredientIntentHandler,
     SetProfileIntentHandler,

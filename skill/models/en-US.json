@@ -55,6 +55,22 @@
           ]
         },
         {
+          "name": "ReadyNowIntent",
+          "slots": [],
+          "samples": [
+            "what can i make without going shopping",
+            "what can i cook without going to the store",
+            "what can i make right now",
+            "what can i cook right now",
+            "what can i make without shopping",
+            "i don't want to go shopping what can i make",
+            "what needs no shopping",
+            "anything i can cook right now",
+            "what can i make tonight",
+            "what can i cook tonight"
+          ]
+        },
+        {
           "name": "SubstituteIntent",
           "slots": [{ "name": "ingredient", "type": "INGREDIENT" }],
           "samples": [

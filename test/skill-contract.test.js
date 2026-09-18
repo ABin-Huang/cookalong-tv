@@ -105,6 +105,19 @@ test("the kitchen half of the skill is actually reachable", async () => {
   assert.doesNotMatch(text, ERROR_SPEECH);
 });
 
+test("ReadyNowIntent is reachable end to end, and remembers the kitchen", async () => {
+  // The whole path a real device walks: the model routes the utterance, index.js
+  // maps it, responses.js answers — and the second turn still knows the kitchen
+  // from the first, because a cook who just said what they have should not be
+  // asked again. A handler wired to a builder nobody exported fails here.
+  const ask = await invoke(intentRequest(null, "WhatDoIHaveIntent", { ingredients: "pasta, tomato, garlic and basil" }));
+  const res = await invoke(intentRequest(ask.sessionAttributes || {}, "ReadyNowIntent"));
+  const text = speakText(res);
+  assert.doesNotMatch(text, ERROR_SPEECH);
+  assert.match(text, /nothing bought/i, `expected the no-shopping answer, got: ${text}`);
+  assert.match(text, /Tomato Basil Pasta/, `expected the stocked dish, got: ${text}`);
+});
+
 test("SetTimerIntent falls back to the current step's own cooking time", async () => {
   const start = await invoke(intentRequest(null, "StartCookingIntent", { recipe: "garlic chicken rice" }));
   const attrs = start.sessionAttributes || {};

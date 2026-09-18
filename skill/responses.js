@@ -17,6 +17,10 @@ const {
   matchRecipesWithExclusions,
   findSubstitute,
   substituteInSteps,
+  suggest,
+  readyNow,
+  isReadyNow,
+  SUGGEST_FLOOR,
   displayName
 } = require("../src/ingredients");
 const { Timer } = require("../src/timer");
@@ -36,7 +40,10 @@ const APL = {
   swapConfirm: require("./apl/swap-confirm.json")
 };
 
-const MATCH_FLOOR = 40;
+// The floor for declaring a winner and the floor for listing options used to be
+// two numbers (40 here, 25 in the browser). They live in the engine now, so the
+// two surfaces cannot disagree about whether there was an answer at all.
+const MATCH_FLOOR = SUGGEST_FLOOR;
 const MATCH_LIMIT = 3;
 
 /* ----------------------------- small helpers ---------------------------- */
@@ -66,18 +73,50 @@ function rewrittenSteps(recipe, swaps) {
   return steps;
 }
 
+/** "a", "a and b", "a, b and c" — the way a person says a list out loud. */
+function andList(items) {
+  const list = items.filter(Boolean);
+  if (list.length <= 1) return list[0] || "";
+  return `${list.slice(0, -1).join(", ")} and ${list[list.length - 1]}`;
+}
+
 function spokenMatch(m, rank) {
   const lead = rank ? `Option ${rank + 1}: ` : "Best match: ";
   let line = `${lead}${m.recipe.name}, ${m.score} percent match. `;
-  if (m.missingSubstitutable.length) {
-    line += `You are missing ${m.missingSubstitutable.map(displayName).join(" and ")}, ` +
-      "but each one has a swap that fits your needs. ";
-  } else if (m.missingHard.length) {
-    line += `You still need ${m.missingHard.map(displayName).join(" and ")}. `;
-  } else {
-    line += "You have everything you need. ";
+  const swaps = (m.missingSubstitutable || []).map(displayName);
+  const hard = (m.missingHard || []).map(displayName);
+
+  // A dish can be short of both kinds at once, and it used to report only the
+  // swappable ones — "you are missing shrimp, lemon and butter, but each one has
+  // a swap" — while hiding that garlic, scallion and rice are hard misses. A
+  // cook who acted on that sentence found three more things to buy. Both halves
+  // are said now, and the swap is never allowed to stand in for the miss.
+  if (!swaps.length && !hard.length) return line + "You have everything you need. ";
+  if (swaps.length) {
+    line += `You are missing ${andList(swaps)}, but ${swaps.length > 1 ? "each one has a swap" : "it has a swap"} ` +
+      "that fits your needs. ";
+  }
+  if (hard.length) {
+    line += `${swaps.length ? "You would still need to buy" : "You still need"} ${andList(hard)}. `;
   }
   return line;
+}
+
+/**
+ * The one line that answers "what should I cook tonight", said out loud.
+ *
+ * A voice answer that opens with a percentage is a score, not a decision, and
+ * the cook is standing in a kitchen with their hands full. This opens with the
+ * dish. It also claims only what the match actually supports: "ready" is the
+ * strict reading (the engine's isReadyNow), so a swap-only dish is described as
+ * a swap rather than as something the cook already has.
+ */
+function spokenDecision(m) {
+  const swaps = andList((m.missingSubstitutable || []).map(displayName));
+  const verdict = isReadyNow(m)
+    ? "You have everything it needs."
+    : `Nothing essential is missing — ${swaps} can be swapped for something that fits your needs.`;
+  return `Tonight, cook ${m.recipe.name}. ${verdict}`;
 }
 
 /* ------------------------------ datasources ----------------------------- */
@@ -227,8 +266,21 @@ function buildWhatDoIHave(raw, session) {
   const unknownLine = unknown.length ? ` I did not recognize ${unknown.join(", ")}.` : "";
   const excludedLine = excluded.length
     ? ` <break time="120ms"/>${excluded.length} recipe${excluded.length > 1 ? "s were" : " was"} hidden for your diet or allergies.` : "";
+
+  // The list on screen stays the ranked one, because "what else" browsing can
+  // afford to be generous. The sentence is a different question — "what should I
+  // cook" — and it is answered by the engine's suggest(), which will not name a
+  // dish that still needs a trip to the shop. Same two-object split as the web
+  // app draws between the decision banner and the folds underneath it.
+  const decision = suggest(matches);
+  const lead = decision
+    ? `${spokenDecision(decision.pick)} ${picks.length > 1
+        ? `It is the best of ${picks.length} matches.`
+        : "It is your best match."}`
+    : spokenMatch(picks[0], 0);
+
   return {
-    speech: `<speak>${spokenMatch(picks[0], 0)}${excludedLine}${unknownLine}${tail}</speak>`,
+    speech: `<speak>${lead}${excludedLine}${unknownLine}${tail}</speak>`,
     reprompt: 'Say "cook it", "what else", or add ingredients.',
     document: APL.matchResults,
     datasource: matchDatasource(picks, recognized, excluded)
@@ -264,6 +316,77 @@ function matchDatasourceWithBest(picks, haves, excluded, bestIndex) {
   const ds = matchDatasource(picks, haves, excluded);
   ds.cookalongData.properties.matches.forEach((row, i) => { row.best = i === bestIndex; });
   return ds;
+}
+
+/**
+ * "What can I make without going shopping?" — the question this app exists to
+ * answer, asked out loud.
+ *
+ * The strict reading is deliberate. readyNow() means nothing is missing at all,
+ * not even something with a swap, because a swap is still a decision to make and
+ * is usually a thing to buy. When nothing clears that bar the answer says so and
+ * offers the dish that is one swap away, instead of quietly promoting it to
+ * "ready" and sending someone out to the shop they asked to avoid.
+ */
+function buildReadyNow(session) {
+  const haves = session.lastHaves;
+  if (!Array.isArray(haves) || !haves.length) {
+    return {
+      speech: "<speak>I don't know what is in your kitchen yet. Say, I have chicken and rice, " +
+        "and I will tell you what needs no shopping at all.</speak>",
+      reprompt: "What is in your kitchen?"
+    };
+  }
+
+  const profile = profileOf(session);
+  const { matches, excluded } = matchRecipesWithExclusions(haves, RECIPES, profile);
+  const havesLine = andList(haves.map(displayName));
+  const excludedLine = excluded.length
+    ? ` <break time="120ms"/>${excluded.length} recipe${excluded.length > 1 ? "s were" : " was"} hidden for your diet or allergies.` : "";
+  const ready = readyNow(matches).slice(0, MATCH_LIMIT);
+
+  if (ready.length) {
+    session.awaitingCook = true;
+    session.matchIndex = 0;
+    session.matchIds = ready.map(m => m.recipe.id);
+    const tail = ready.length > 1
+      ? ' Say "cook it" to start the first, or say another by name.'
+      : ' Say "cook it" to start.';
+    return {
+      speech: `<speak>With ${havesLine}, ${ready.length} recipe${ready.length > 1 ? "s need" : " needs"} ` +
+        `nothing bought: ${andList(ready.map(m => m.recipe.name))}.${excludedLine}${tail}</speak>`,
+      reprompt: tail.trim(),
+      document: APL.matchResults,
+      datasource: matchDatasource(ready, haves, excluded)
+    };
+  }
+
+  const decision = suggest(matches);
+  // "cook it" still has to work on the dish just recommended, so the session
+  // points at it even though it is not in the strict no-shopping list.
+  session.awaitingCook = Boolean(decision);
+  session.matchIndex = 0;
+  session.matchIds = decision ? [decision.pick.recipe.id] : [];
+
+  if (decision) {
+    // Deliberately not "one swap, not a shopping trip": the substitute is a swap
+    // the cook has to agree to, and whether they own it is something this skill
+    // has no way to know. spokenDecision claims exactly what is true and stops.
+    return {
+      speech: `<speak>With ${havesLine}, nothing is fully stocked. ${spokenDecision(decision.pick)}` +
+        `${excludedLine} So say "cook it", or say "what do I need to buy".</speak>`,
+      reprompt: 'Say "cook it", or say "what do I need to buy".'
+    };
+  }
+
+  const closest = matches.length
+    ? ` The closest is ${matches[0].recipe.name}, which still needs ${andList(matches[0].missingHard.map(displayName))}.`
+    : "";
+  return {
+    speech: `<speak>With ${havesLine}, nothing here can be cooked without a shop.${closest}${excludedLine} ` +
+      'Say "what do I need to buy" and I will write the list.</speak>',
+    reprompt: "Tell me another ingredient, or ask what you need to buy."
+  };
 }
 
 /* ------------------------------- swaps ---------------------------------- */
@@ -605,6 +728,7 @@ module.exports = {
   buildStartCooking,
   buildWhatDoIHave,
   buildNextMatch,
+  buildReadyNow,
   buildSubstitute,
   buildExclude,
   buildNextStep,
