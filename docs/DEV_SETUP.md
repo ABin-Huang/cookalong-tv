@@ -138,6 +138,17 @@ test. Install it only if you want the browser checks:
 npm i -D playwright && npx playwright install chromium
 ```
 
+If a playwright install already exists somewhere else on the machine, point
+`NODE_PATH` at its `node_modules` rather than downloading a second browser:
+
+```bash
+NODE_PATH=C:\path\to\node_modules npm run verify:browser
+```
+
+Use the native path separator. Node on Windows ignores a POSIX-style `NODE_PATH`
+without complaining, and the harness then reports playwright as missing — which
+reads like a broken install rather than a path that was never seen.
+
 `scripts/verify-browser.js` lives in `scripts/` rather than `test/` on purpose:
 `node --test` treats every `.js` file under a `test/` directory as a test file,
 so a harness parked there would be picked up by `npm test` and fail wherever

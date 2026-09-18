@@ -24,8 +24,15 @@
  *   npm start                 # in one terminal — serves public/ on :8080
  *   npm run verify:browser    # in another
  *
- * Requires playwright (npm i -D playwright && npx playwright install chromium).
- * Override the target with COOKALONG_URL=http://localhost:3000/index.html
+ * Requires playwright. Either install it here
+ * (npm i -D playwright && npx playwright install chromium), or point NODE_PATH
+ * at an install you already have — e.g. a shared one outside the repo:
+ *
+ *   NODE_PATH=C:\path\to\node_modules npm run verify:browser
+ *
+ * NODE_PATH must use the native path separator; a POSIX-style path is silently
+ * ignored by Node on Windows and this harness will still report playwright
+ * missing. Override the target with COOKALONG_URL=http://localhost:3000/index.html
  */
 
 let chromium;
@@ -35,6 +42,10 @@ try {
   console.error(
     "This harness needs playwright, which is not installed:\n" +
     "  npm i -D playwright && npx playwright install chromium\n\n" +
+    "If you already have playwright somewhere else, point NODE_PATH at its\n" +
+    "node_modules instead of installing a second copy (native path separator;\n" +
+    "a POSIX-style path is ignored on Windows):\n" +
+    "  NODE_PATH=C:\\path\\to\\node_modules npm run verify:browser\n\n" +
     "It is intentionally not a dependency, so that `npm test` stays runnable\n" +
     "anywhere. See docs/DEV_SETUP.md."
   );
