@@ -393,14 +393,49 @@ no `start`, no `result`, no `error`. Measured, not assumed — driving a live
 recognition for 3.5 seconds produced zero events. The old code wrote "Listening…
 speak a command" and left it there indefinitely. So every way a listen can end
 now ends in words: a result, a named error translated into the cook's language,
-a grace timeout for a microphone that never opened, a limit timeout for an
-utterance that never finishes, or a natural end with nothing heard. The two
-timeout paths **close the microphone** rather than waiting for `end`, because
-`end` is exactly the event this browser does not send — and a path that waits for
-it leaves a control that believes a session is still running, which makes the next
-tap a stop request and the microphone dead for the rest of the cook. The browser
-harness drives a real recogniser where there is one and stands in for one where
-there is not, then asserts that no path ends in silence.
+a deadline for a microphone that never opened, a limit timeout for an utterance
+that never finishes, or a natural end with nothing heard. Both timeout paths
+**close the microphone** rather than waiting for `end`, because `end` is exactly
+the event this browser does not send — and a path that waits for it leaves a
+control that believes a session is still running, which makes the next tap a stop
+request and the microphone dead for the rest of the cook.
+
+**Existence of the API is not evidence that it works**, and the first version of
+this layer conflated the two: it decided whether the microphone button was worth
+offering by asking whether `SpeechRecognition` was a constructor. In a browser
+that accepts `start()` and answers nothing, that question is always `true`, which
+is why a feature that reported itself as working was unusable in practice. The
+measurement that matters is liveness: `onstart`/`onaudiostart` are the first
+things a working recogniser emits, within milliseconds, so the wait is split in
+two — 1.2 s for *has it started at all*, then 10 s for *has the utterance
+finished*. A recogniser that has said nothing after the first is not going to, and
+that verdict is then **remembered** (`voiceInputDead`), because re-proving it on
+every press just replays the same failure more slowly. It is cleared by
+`onLive` — a recogniser that starts is not dead, and one unlucky silence must not
+brand the device — and by switching language, since a missing speech model is
+per-language.
+
+A device that cannot listen still has to be cookable. That is what the command
+table is for: its rows are real `<button>`s that run their own example phrase
+through the same `interpret()` the microphone feeds, so selecting "next step" and
+saying it cannot drift apart — one pipeline, not a second implementation for
+pointing at. On a dead microphone the button stops saying *Voice*, says
+*Phrases* instead, and opens that list. This is the only place a dialog opens
+without a press being the cause of it being *useful*, so the two ways it could
+become a trap are closed deliberately: the escape is the panel's own Close (the
+button underneath is unreachable once a modal covers it, which is also why this is
+a single opening rather than a toggle), and the press after that retries the
+microphone rather than reopening the dialog.
+
+**Every voice test used to pass while this was broken**, because each one replaced
+`SpeechRecognition` with a stub that called its callbacks on cue. A double that
+always calls back cannot fail the way a component fails when the callback never
+arrives. `scripts/verify-voice.js` therefore injects the *defect* — a recogniser
+that accepts `start()` and emits nothing — into a real browser running the real
+app, and asserts that the lie ends within the deadline, that the button stops
+offering what does not work, and that a phrase picked from the list actually moves
+the recipe. A live browser is separately checked for the opposite mistake: a
+recogniser that does start must never be written off.
 
 ## The microphone is closed before the app speaks
 
@@ -535,6 +570,15 @@ verdict:
 | voices > 0 | spoken guidance on; mic button offered if `SpeechRecognition` exists |
 | voices == 0 (a Fire TV) | `body.screen-first` (larger step text), header states the limitation, mic button repurposed to open Device check |
 | no `speechSynthesis` | same as above, and the Device check says so |
+
+The three rows above are all decided at load, from what the device *has*. There is
+a fourth state that can only be learned by trying, and it is the one that produced
+the worst bug in this feature: the API is present and the recogniser never opens.
+`capabilities.js` cannot see it — only a failed listen can — so it is tracked in
+`app.js` as `voiceInputDead` and it outranks the table. When it is set, the button
+stops being a microphone button: it says *Phrases* and opens the selectable
+command list, which is the only input left. See *The part that cannot be tested in
+Node* above for how it is measured, cleared, and tested.
 
 This is deliberately not user-agent sniffing: the same Silk build behaves
 differently across device generations, and a string is a guess where a

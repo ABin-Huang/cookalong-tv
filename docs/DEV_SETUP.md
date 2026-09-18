@@ -154,6 +154,44 @@ reads like a broken install rather than a path that was never seen.
 so a harness parked there would be picked up by `npm test` and fail wherever
 there is no browser.
 
+### Voice checks (opt-in, and read this before trusting the voice layer)
+
+```bash
+npm start                 # terminal 1 — serves public/ on :8080
+npm run verify:voice      # terminal 2 — needs a display; falls back to any headed browser
+```
+
+There is a second harness for voice specifically, because the browser checks
+above are not enough for it — and the reason is a mistake worth not repeating.
+
+Every voice test in this repo used to replace `SpeechRecognition` with a stub
+that called its callbacks on cue. All of them passed, for months, while the real
+feature was unusable. The stub cannot fail the way the platform fails: a real
+recogniser accepts `start()`, returns normally, and then emits **nothing at all**
+— no `onstart`, no `onresult`, no `onerror`, no `onend` — when there is no speech
+service behind it. Chromium in headless mode does exactly this. A test double that
+always calls back is therefore not a weaker version of the real test; it is a test
+of something else.
+
+So `scripts/verify-voice.js` asserts on the failure itself. Three stages:
+
+| Stage | What it does | Asserted? |
+| --- | --- | --- |
+| A | Opens this build's real recogniser and records what it emits | No — printed, because it is the fact the design turns on |
+| B | Injects a recogniser that accepts `start()` and never reports starting, then presses the microphone | Yes — this is the cook's bug, made deterministic |
+| C | Headed browser: barge-in, and that a recogniser which *does* start is never written off | Yes, skipped where the platform cannot do it |
+
+Stage B is fault injection, not a mock: the app, the DOM, the timers and the event
+loop are all real, and only the one component that is broken on the target device
+is replaced — with the exact behaviour that broke it. What it proves is that the
+app notices within its own deadline, stops claiming to listen, stops calling the
+button "Voice", opens the list of phrases that can be selected instead, and runs a
+selected phrase through the same interpreter the microphone feeds.
+
+Two things it deliberately does **not** cover: transcription (that is the
+browser's speech service, not this app, and it cannot be made deterministic) and
+the Alexa side (see `npm run --prefix skill test`).
+
 ## Service worker
 
 `public/sw.js` pre-caches the app shell and serves **network-first**, so edits

@@ -356,21 +356,36 @@ the parts a person would actually notice are checked in a real browser, on deman
 
 ```bash
 npm start                 # terminal 1 — serves public/ on :8080
-npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 68 checks
+npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 72 checks
+npm run verify:voice      # terminal 2 — the voice layer, against a real recogniser
 ```
 
 It presses the real buttons and reads the real DOM: the panel lists and ticks, the
 badge counts down, the step card stays on screen at 1080p, focus lands inside the
 panel so a D-pad can reach it, the list survives a reload, and the console stays
-clean. The voice block drives a real microphone where the browser has one and
-stands in for one where it does not, because the failures worth catching are only
-visible there: a microphone that never really opens has to end in words, a listen
-ended by the timeout has to leave the button usable, the transcript has to show
-both sides of the exchange, the help list on screen has to be the command table
-rather than a copy of it, and the line telling a new cook how to talk has to
-survive a 1280×720 screen uncut. Playwright is deliberately not a dependency —
-CI has no browser, and a test that cannot run is worse than no test. See
-`docs/DEV_SETUP.md`.
+clean. The voice block covers the states only a browser can produce: a microphone
+that never really opens has to end in words *and* hand over the list that does
+work, a listen ended by the timeout has to leave the button usable, the transcript
+has to show both sides of the exchange, the help list on screen has to be the
+command table rather than a copy of it, and the line telling a new cook how to talk
+has to survive a 1280×720 screen uncut.
+
+`verify:voice` exists because the checks above are not enough for voice, and the
+reason is worth stating plainly. Every voice test in this repo used to replace
+`SpeechRecognition` with a stub that called the callbacks on cue, so they all
+passed while the real thing was dead: a recogniser that accepts `start()` and then
+emits nothing at all — no start, no result, no error — which is exactly what
+Chromium does in headless mode. A stub that always calls back cannot fail the way a
+component fails when the callback never arrives. So the voice harness drives the
+real app in a real browser and asserts on the real failure, by injecting the one
+thing that is broken on the target device — a recogniser that never reports
+starting — and then checking that the app notices, stops claiming to listen, stops
+offering a microphone it has proved it does not have, and hands over the list of
+phrases that can be selected instead. It also checks barge-in, and that a browser
+whose recogniser *does* work is never mistaken for a dead one.
+
+Playwright is deliberately not a dependency — CI has no browser, and a test that
+cannot run is worse than no test. See `docs/DEV_SETUP.md`.
 
 ## What a Fire TV actually does
 
