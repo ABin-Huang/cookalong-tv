@@ -92,6 +92,9 @@ const PreviousStepIntentHandler = intentHandler("PreviousStepIntent", handlerInp
 const RepeatStepIntentHandler = intentHandler("RepeatStepIntent", handlerInput =>
   respond(handlerInput, R.buildRepeatStep(state(handlerInput))));
 
+const CookPlanIntentHandler = intentHandler("CookPlanIntent", handlerInput =>
+  respond(handlerInput, R.buildCookPlan(state(handlerInput))));
+
 /* ----------------------------- smart match ------------------------------ */
 
 const WhatDoIHaveIntentHandler = intentHandler("WhatDoIHaveIntent", handlerInput =>
@@ -251,6 +254,7 @@ exports.handler = Alexa.SkillBuilders.custom()
     NextStepIntentHandler,
     PreviousStepIntentHandler,
     RepeatStepIntentHandler,
+    CookPlanIntentHandler,
     WhatDoIHaveIntentHandler,
     NextMatchIntentHandler,
     SubstituteIntentHandler,

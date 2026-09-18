@@ -119,6 +119,49 @@ test("buildNextStep past the end congratulates the cook", () => {
   assert.ok(/last step|enjoy/i.test(out.speech));
 });
 
+/* ------------------------------ cook plan ------------------------------ */
+
+test("buildCookPlan names the longest wait and what the step times add up to", () => {
+  const s = freshState();
+  R.buildStartCooking("garlic chicken rice", s);
+  const out = R.buildCookPlan(s);
+  assert.strictEqual(out.document, R.APL.cooking);
+  assert.ok(/5 of 7 steps name a time/.test(out.speech));
+  assert.ok(/32 minutes and 30 seconds/.test(out.speech), "the named times, spoken");
+  assert.ok(/step 6, 18 minutes/.test(out.speech), "the one long wait, by step number");
+  assert.ok(/worth a timer/i.test(out.speech));
+  assert.ok(/Longest wait: step 6/.test(out.datasource.cookalongData.properties.hint));
+});
+
+test("buildCookPlan never orders the cook to start the long step first", () => {
+  // The soup's 25-minute simmer needs the browning before it, so "start that one
+  // first" would be wrong on precisely the recipe where the plan matters most.
+  // The line names the step and says it is worth a timer; it does not sequence it.
+  const s = freshState();
+  R.buildStartCooking("hearty chicken soup", s);
+  const out = R.buildCookPlan(s);
+  assert.ok(/step 6, 25 minutes/.test(out.speech));
+  assert.ok(!/start (?:that|it|this|the long)\b[^.]*\bfirst/i.test(out.speech),
+    "the plan reports the long wait, it does not prescribe the order");
+});
+
+test("buildCookPlan without a recipe explains how to start one", () => {
+  const out = R.buildCookPlan(freshState());
+  assert.ok(/cook tomato basil pasta/i.test(out.speech));
+  assert.ok(out.reprompt);
+});
+
+test("buildCookPlan agrees with SetTimerIntent about what a step is asking for", () => {
+  // Both read the same parser. If they ever disagree, the plan is the one on
+  // screen, so it would be the one that looked right.
+  const s = freshState();
+  R.buildStartCooking("creamy mushroom risotto", s);   // longest step: 18 minutes
+  const plan = R.buildCookPlan(s);
+  assert.ok(/step 5, 18 minutes/.test(plan.speech));
+  assert.ok(/set a timer for 18 minutes/.test(plan.reprompt),
+    "the reprompt should offer the timer the SetTimerIntent would build");
+});
+
 /* ------------------------------- profile ------------------------------- */
 
 test("buildSetProfile stores diets/allergens and de-duplicates", () => {

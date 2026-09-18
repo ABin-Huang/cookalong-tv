@@ -16,7 +16,19 @@ DynamoDB persistence of diet/allergen profiles.
 | `scripts/bundle.js` | Builds a self-contained Lambda package in `dist/` |
 
 Shared cooking engines live in `../src` (`recipes.js`, `ingredients.js`,
-`timer.js`) and are reused verbatim by the web app and the skill.
+`timer.js`, `servings.js`, `plan.js`, `progress.js`, `capabilities.js`) and are
+reused verbatim by the web app and the skill. `scripts/bundle.js` copies the
+whole `src/` directory into the package, so a new engine needs no change here —
+but it does need a `require` line in `responses.js`/`index.js`, and
+`src/plan.js` resolves `./timer.js` at load time, so copying is order-free
+because Node resolves it per file.
+
+**Adding an intent is a two-sided change.** A new sample utterance in
+`models/en-US.json` without a matching handler in `index.js` makes Alexa answer
+"Sorry, something went wrong", and only the interaction model upload fixes it —
+`test/skill-contract.test.js` catches the mismatch before you deploy, but a
+model already live in the Console keeps the old intents until you re-upload
+`models/en-US.json`.
 
 ## Option A — ASK CLI (recommended)
 
@@ -59,7 +71,9 @@ skill still works, profile is session-only.
 5. `I don't have basil` → swap-confirmation screen, plant-based swap only
 6. `next step` → cooking screen advances and progress bar updates
 7. `set a timer for 5 minutes` → spoken confirmation
-8. `help`, then `stop`
+8. `which step takes longest` → "5 of 7 steps name a time… the longest single
+   wait is step 6, 18 minutes — that is the one worth a timer"
+9. `help`, then `stop`
 
 ## APL testing
 

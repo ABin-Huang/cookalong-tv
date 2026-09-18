@@ -121,6 +121,19 @@
           ]
         },
         {
+          "name": "CookPlanIntent",
+          "slots": [],
+          "samples": [
+            "what should i start first",
+            "whats the cook plan",
+            "cook plan",
+            "what takes longest",
+            "which step takes longest",
+            "what is the longest wait",
+            "how long does this take altogether"
+          ]
+        },
+        {
           "name": "SetTimerIntent",
           "slots": [{ "name": "duration", "type": "AMAZON.DURATION" }],
           "samples": [

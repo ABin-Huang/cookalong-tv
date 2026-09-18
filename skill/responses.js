@@ -19,6 +19,8 @@ const {
   substituteInSteps,
   displayName
 } = require("../src/ingredients");
+const { Timer } = require("../src/timer");
+const { summary: summarizePlan } = require("../src/plan");
 
 const APL = {
   matchResults: require("./apl/match-results.json"),
@@ -375,6 +377,60 @@ function buildRepeatStep(session) {
   };
 }
 
+/* ------------------------------- cook plan ------------------------------- */
+
+/**
+ * "What should I start first?" — the question a step-at-a-time recipe cannot
+ * answer, and the one that matters most on this surface. A Lambda invocation
+ * cannot ring later, so a spoken timer is a note-to-self at best; what the skill
+ * can honestly offer is which step is the long one, so the cook knows where the
+ * clock matters before the pan is already hot.
+ *
+ * The durations come from plan.js, which reads them through
+ * `stepDurationSeconds` — the parser SetTimerIntent also uses — so "which step
+ * takes longest" and "set a timer" can never give two answers about one step.
+ *
+ * It reports, it does not order. The longest wait is often *not* the first thing
+ * to do (the soup's 25-minute simmer needs the browning first), so the line names
+ * the step and says it is the one worth a timer rather than telling anyone to
+ * start it first.
+ */
+function buildCookPlan(session) {
+  const recipe = session.recipeId ? getRecipe(session.recipeId) : null;
+  if (!recipe) {
+    return {
+      speech: "<speak>You have not started a recipe yet. Say cook tomato basil pasta, then ask me which step takes longest.</speak>",
+      reprompt: "Say start cooking to begin."
+    };
+  }
+  const steps = rewrittenSteps(recipe, session.swaps);
+  const plan = summarizePlan(steps);
+  if (!plan.timedCount) {
+    return {
+      speech: `<speak>${recipe.name} does not name a cooking time in any step, so there is nothing to put on a clock.</speak>`,
+      reprompt: 'Say "next step" when ready.',
+      document: APL.cooking,
+      datasource: cookingDatasource(recipe, session.step, session.swaps,
+        "Every step is hands-on — say next step when ready.")
+    };
+  }
+
+  const long = plan.longest;
+  const others = plan.timedCount - 1;
+  const also = others
+    ? ` ${others} other step${others === 1 ? " names" : "s name"} a time too.`
+    : "";
+  return {
+    speech: `<speak>${plan.timedCount} of ${plan.totalCount} steps name a time, and the times they name add up to ` +
+      `${new Timer(plan.namedSeconds).speak()}. The longest single wait is step ${long.index + 1}, ` +
+      `${new Timer(long.seconds).speak()} — that is the one worth a timer.${also}</speak>`,
+    reprompt: `Say "set a timer for ${Math.round(long.seconds / 60)} minutes" when you reach it.`,
+    document: APL.cooking,
+    datasource: cookingDatasource(recipe, session.step, session.swaps,
+      `Longest wait: step ${long.index + 1}, ${new Timer(long.seconds).speak()}.`)
+  };
+}
+
 /* ------------------------------- profile -------------------------------- */
 
 function buildSetProfile(dietSlot, allergenSlot, session, removing = false) {
@@ -412,11 +468,11 @@ function buildSetProfile(dietSlot, allergenSlot, session, removing = false) {
 const HELP_SPEECH =
   "<speak>CookAlong TV helps you cook hands-free. Say I have chicken and rice to find a match, " +
   "cook tomato basil pasta to start, I am vegan to set your diet, I do not have parmesan for a smart swap, " +
-  "next step to continue, or set a timer for 5 minutes.</speak>";
+  "next step to continue, which step takes longest to find the long wait, or set a timer for 5 minutes.</speak>";
 
 const FALLBACK_SPEECH =
   "<speak>I didn't catch that. Try I have chicken and rice, cook tomato basil pasta, I am vegan, " +
-  "I do not have parmesan, next step, or set a timer for 5 minutes.</speak>";
+  "I do not have parmesan, next step, which step takes longest, or set a timer for 5 minutes.</speak>";
 
 module.exports = {
   APL,
@@ -429,6 +485,7 @@ module.exports = {
   buildNextStep,
   buildPreviousStep,
   buildRepeatStep,
+  buildCookPlan,
   buildSetProfile,
   rewrittenSteps,
   matchDatasource,
