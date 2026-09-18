@@ -47,6 +47,51 @@ test("parseIngredientList de-duplicates and reports unknown fragments", () => {
   assert.deepStrictEqual(r.unknown, ["dragonfruit"]);
 });
 
+test("a list spoken without commas is read as a list, not as its first word", () => {
+  // This is the difference between the keyboard and the microphone. A recogniser
+  // hands back one sentence and there is nothing in it that splits on: no commas,
+  // no "and" until the very end. The parser used to answer that with its first
+  // word, so saying nine ingredients matched one — and the microphone, the whole
+  // point of the app, was the worst way to ask its central question.
+  const spoken = I.parseIngredientList(
+    "what can I cook with chicken beef rice pasta tomato onion garlic carrot and potato"
+  );
+  assert.deepStrictEqual(spoken.recognized,
+    ["chicken", "beef", "rice", "pasta", "tomato", "onion", "garlic", "carrot", "potato"]);
+  assert.deepStrictEqual(spoken.unknown, [], "nothing in that sentence is unknown");
+
+  // And a spoken list should reach the same answer as the same list typed.
+  const typed = I.parseIngredientList("chicken, beef, rice, pasta, tomato, onion, garlic, carrot, potato");
+  assert.deepStrictEqual(spoken.recognized, typed.recognized,
+    "saying the list and typing the list must mean the same kitchen");
+});
+
+test("multi-word ingredients survive a list that is spoken without commas", () => {
+  // "chicken thighs" and "extra firm tofu" are one ingredient each; reading the
+  // words one at a time would turn the first into chicken and lose the second.
+  const r = I.parseIngredientList("i have chicken thighs extra firm tofu olive oil and eggs");
+  assert.deepStrictEqual(r.recognized, ["chicken", "tofu", "olive-oil", "egg"]);
+
+  // The pair has to win over its first word even when the next word is also food.
+  assert.deepStrictEqual(
+    I.parseIngredientList("bell pepper onion").recognized,
+    ["bell-pepper", "onion"]
+  );
+});
+
+test("words that are manners rather than ingredients are not reported as unknown", () => {
+  const r = I.parseIngredientList("chicken please and rice thanks");
+  assert.deepStrictEqual(r.recognized, ["chicken", "rice"]);
+  assert.deepStrictEqual(r.unknown, []);
+});
+
+test("a spoken list still works in Chinese, where the words carry no spaces", () => {
+  assert.deepStrictEqual(
+    I.parseIngredientList("冰箱里有鸡蛋西红柿和青椒").recognized,
+    ["egg", "tomato", "bell-pepper"]
+  );
+});
+
 /* ---------- matchRecipes ---------- */
 
 test("matchRecipes ranks the best recipe first", () => {

@@ -141,7 +141,109 @@
   const LEADIN = /^(?:i have|i have got|i'?ve got|my fridge has|fridge has|i got|have got|what can i make with|what can i cook with|make with|cook with|我有|我家里有|冰箱里有|家里有|有)\s*/i;
 
   /**
-   * Parse a free-form ingredient list ("chicken, tomatoes and onion").
+   * The canonical id for a fragment that is exactly one ingredient, with the
+   * same cleaning normalizeIngredient applies.
+   */
+  function aliasFor(text) {
+    if (!text) return null;
+    let t = String(text).toLowerCase().trim();
+    t = t.replace(/[.?!，。！？]/g, " ").replace(/\s+/g, " ").trim();
+    t = t.replace(LEAD_QTY, "").trim();
+    return ALIASES[t] || null;
+  }
+
+  /** Words that are manners, not ingredients, and so never "unknown". */
+  const POLITE = /^(?:please|thanks?|thank you|the|a|an|some|and|also)$/;
+
+  const CJK_RUN = /^[\u4e00-\u9fff]+$/;
+
+  /**
+   * Read a run of Chinese characters.
+   *
+   * Chinese carries neither the spaces an English sentence splits on nor the
+   * commas a written list uses, so "鸡蛋西红柿青椒" is one unbroken fragment and
+   * the word scan cannot see inside it. Walk the characters and take the longest
+   * alias at each position instead. A character that is not part of any
+   * ingredient is skipped rather than reported: naming the ones that were
+   * recognised is worth more than a list of the characters that were not.
+   *
+   * @param {string} text
+   * @returns {{canon: string, raw: string}[]}
+   */
+  function readCjkRun(text) {
+    const out = [];
+    let i = 0;
+    while (i < text.length) {
+      let canon = null;
+      let len = 0;
+      for (let n = Math.min(6, text.length - i); n >= 1; n -= 1) {
+        const hit = ALIASES[text.slice(i, i + n)];
+        if (hit) { canon = hit; len = n; break; }
+      }
+      if (canon) {
+        out.push({ canon, raw: text.slice(i, i + len) });
+        i += len;
+      } else {
+        i += 1;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Read one fragment of an ingredient list.
+   *
+   * Speech has no commas. "chicken beef rice pasta" arrives as a single fragment
+   * because nothing separates the words, and it used to be answered by its first
+   * word alone — a spoken list of nine ingredients matched one, which made the
+   * microphone a strictly worse way to ask the app's central question than the
+   * keyboard. So a fragment that is not itself one ingredient is walked word by
+   * word, taking the longest alias at each position: that keeps "chicken thighs"
+   * and "extra firm tofu" whole while reading "chicken beef" as two.
+   *
+   * @param {string} frag
+   * @returns {{canon: string|null, raw: string}[]}
+   */
+  function readFragment(frag) {
+    const whole = aliasFor(frag);
+    if (whole) return [{ canon: whole, raw: frag }];
+
+    const words = String(frag).split(/\s+/).filter(Boolean);
+    if (words.length <= 1) {
+      const single = normalizeIngredient(frag);
+      if (single) return [{ canon: single, raw: frag }];
+      // One unbroken run of Chinese: nothing to split on, so scan the aliases.
+      const packed = String(frag).replace(/\s+/g, "");
+      if (CJK_RUN.test(packed)) {
+        return readCjkRun(packed).map(part => ({ canon: part.canon, raw: part.raw }));
+      }
+      return [{ canon: null, raw: frag }];
+    }
+
+    const out = [];
+    let i = 0;
+    while (i < words.length) {
+      let canon = null;
+      let span = 1;
+      // Longest first, so a known pair is never read as its first word.
+      for (let n = Math.min(3, words.length - i); n >= 2; n -= 1) {
+        const hit = aliasFor(words.slice(i, i + n).join(" "));
+        if (hit) { canon = hit; span = n; break; }
+      }
+      if (!canon) canon = normalizeIngredient(words[i]);
+      if (canon) {
+        out.push({ canon, raw: words.slice(i, i + span).join(" ") });
+      } else if (!POLITE.test(words[i])) {
+        out.push({ canon: null, raw: words[i] });
+      }
+      i += span;
+    }
+    return out;
+  }
+
+  /**
+   * Parse a free-form ingredient list ("chicken, tomatoes and onion", or the
+   * same thing said out loud with no commas at all).
    * @param {string} text
    * @returns {{recognized: string[], unknown: string[]}} de-duplicated
    */
@@ -153,11 +255,12 @@
     cleaned = cleaned.replace(LEADIN, "").trim();
     const fragments = cleaned.split(SPLITTERS).map(s => s.trim()).filter(Boolean);
     for (const frag of fragments) {
-      const canon = normalizeIngredient(frag);
-      if (canon) {
-        if (!recognized.includes(canon)) recognized.push(canon);
-      } else if (frag && !/^(please|thanks?|thank you)$/.test(frag)) {
-        unknown.push(frag);
+      for (const part of readFragment(frag)) {
+        if (part.canon) {
+          if (!recognized.includes(part.canon)) recognized.push(part.canon);
+        } else if (part.raw && !POLITE.test(part.raw)) {
+          unknown.push(part.raw);
+        }
       }
     }
     return { recognized, unknown };
