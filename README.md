@@ -67,6 +67,19 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   survives a reload or the app being backgrounded, keeps counting while you
   browse other recipes, and ends with a chime plus a full-screen alert. Ask by
   voice — "what timers are running" answers.
+- **A cook plan that answers "what goes on first?"** — parallel timers only help
+  a cook who already knows which steps have a clock on them, and until now that
+  arrived one step at a time behind a Next press. Which is exactly why the
+  18-minute braise got discovered with everything else already going. The recipe
+  screen now lists every step that names a time, with its own duration and a
+  one-press **⏱ Start** on every row, so the long pot can be started from step 1.
+  The summary line names the longest single wait and the rows fold away, because
+  measured at 1920×1080 an open plan pushes the step card 344px down and off a
+  ten-foot screen. `per side` is still doubled, a step naming two times still
+  reports the longest, and the durations come from the same parser the ⏱ button
+  uses — there is one answer to "what time is this step asking for", not two.
+  Scaling the yield leaves every planned duration identical, and the plan's own
+  tests hold it to that across all ten recipes.
 - **Works offline** — a service worker pre-caches the app shell, so the kitchen
   UI still opens with no network.
 - **Honest scoring** — every match can explain itself: which ingredients
@@ -90,8 +103,9 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
 | `src/capabilities.js` | Device capability detection: can this device speak, listen, hold a wake lock, persist? (UMD) |
 | `src/progress.js` | Cooking-progress snapshots so a reload does not lose your place (UMD) |
 | `src/servings.js` | Serving scaling: amount arithmetic plus the noun agreement that makes a scaled recipe read as written (UMD) |
+| `src/plan.js` | Cook plan: which steps of a recipe name a time, how long the longest wait is, and which step to start first (UMD) |
 | `scripts/` | `build-web.js` syncs `src/` into `public/`; `serve.js` is the dev server |
-| `test/` | Unit tests for the recipe, ingredient, timer, capability, progress & servings engines, plus two contract tests |
+| `test/` | Unit tests for the recipe, ingredient, timer, capability, progress, servings & plan engines, plus two contract tests |
 
 ## Quick start (web app)
 
@@ -115,7 +129,8 @@ the app refusing to pretend.
 ## Editing the engines
 
 `public/ingredients-engine.js`, `public/timer-engine.js`,
-`public/capabilities-engine.js`, `public/progress-engine.js` and
+`public/capabilities-engine.js`, `public/progress-engine.js`,
+`public/servings-engine.js`, `public/plan-engine.js` and
 `public/recipes-data.js` are generated from `src/`. Never edit them by hand —
 change `src/` and re-sync:
 
@@ -128,24 +143,32 @@ npm run check:web    # verify they match src/ (also runs before npm test and in 
 
 ```bash
 npm install --prefix skill   # once: the skill integration tests need ask-sdk-core
-npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 192 tests
+npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 212 tests
 ```
 
-Two of those tests exist to catch drift rather than logic, because both places
-have already been burned by it once:
+Four of those tests exist to catch drift rather than logic, because every place
+has already been burned by it once:
 
 - `test/skill-contract.test.js` invokes every intent declared in the interaction
   model and fails if any reaches the error handler.
 - `test/web-contract.test.js` checks that every element `app.js` looks up is
   declared in `index.html`, that the page loads every engine the script
-  consumes, that the service worker pre-caches them, and that the capability
-  guard is actually present rather than the bare API check it replaced.
+  consumes, that `plan-engine.js` loads *after* the `timer-engine.js` it reads
+  durations through, that the service worker pre-caches them, and that the
+  capability guard is actually present rather than the bare API check it
+  replaced.
 
 `test/servings.test.js` is the one to read if you want to know how far the
 scaling is trusted: rather than spot-checking strings, it runs **every step of
 every recipe** through the scaler at ×0.5, ×2 and ×3 and fails if any cooking
 time moves, if any amount that should have scaled did not, or if a scaled line
 ever contains `NaN`, `undefined` or a zero measure.
+
+`test/plan.test.js` holds the cook plan to two promises that only a sweep can
+check: that the plan of every shipped recipe is exactly the steps that name a
+time (pinned as a table, so an edit that changes the cook-visible plan has to
+say so), and that neither rescaling the yield nor swapping an ingredient ever
+moves a single planned duration.
 
 ## What a Fire TV actually does
 
@@ -188,6 +211,8 @@ Example utterances:
 - "I am vegan" / "I'm allergic to dairy" → remembered for every match and swap
 - "set a timer for 5 minutes", or just "set a timer" → uses the current step's
   own cooking time
+- "which step takes longest" → the cook plan in words: how many steps name a
+  time, what they add up to, and the one long wait worth putting a timer on
 - "what can I make that is vegan"
 
 > **Known limitation:** the skill's timer is acknowledged in speech, but a
@@ -195,7 +220,9 @@ Example utterances:
 > `CancelTimerIntent` only clears the session. A real alert needs the Alexa
 > Timers/Reminders API. The Fire TV web app's on-screen timer does ring, with a
 > chime and a full-screen alert. This is logged as product friction rather than
-> hidden.
+> hidden — and it is why "which step takes longest" exists: on the skill the
+> useful thing voice can do is tell you where the clock matters before the pan
+> is hot, not ring for you afterwards.
 
 ### Where the response logic lives
 
@@ -220,24 +247,29 @@ unnoticed.
 4. At the cheese step, the swap panel offers cheddar or nutritional yeast →
    apply it and watch the step text change from "grated parmesan" to
    "cheddar cheese"; undo restores it.
-5. Walk to the step that says "stirring often, for about 18 minutes" — the ⏱
-   button now offers 18:00 because the timer read the step. Start it, then step
-   back and set a second one: both run side by side, each named after its own
-   step, and the corner badge reads "18:00 +1". Let the short one run out and
-   the alert names it rather than saying "Timer done".
-6. Press ＋ on **Cooking for** until it reads 6 — the whole recipe rewrites
+5. Press **🥘 Cook plan · Show steps** and the whole cook is on one screen:
+   every step that names a time, its duration, and a **⏱ Start** on each row —
+   "5 of 7 steps name a time · longest 18 min (step 6)". Press Start on the
+   18-minute row *without leaving step 1*: the pot is going and the step on
+   screen never moved. Start the 5-minute rest too — two timers, two pots, and
+   the corner badge reads "18:00 +1".
+6. Walk to the step that says "stirring often, for about 18 minutes" — the ⏱
+   button offers 18:00 because the timer read the step. Let the short one run out
+   and the alert names it rather than saying "Timer done".
+7. Press ＋ on **Cooking for** until it reads 6 — the whole recipe rewrites
    itself for the bigger pot: "1 onion" becomes "3 onions", "250g rice" becomes
-   "750g rice", and the step prose scales in place. Point out what does *not*
-   move: "stirring often, for about 18 minutes" is still 18 minutes, and the
-   header now quotes in-total calories because that is what is in the pan.
-7. Reload the page. Both timers come back (paused, with the time they had left)
+   "750g rice", and the step prose scales in place, cook plan rows and all.
+   Point out what does *not* move: "stirring often, for about 18 minutes" is
+   still 18 minutes, every duration in the cook plan is identical, and the header
+   now quotes in-total calories because that is what is in the pan.
+8. Reload the page. Both timers come back (paused, with the time they had left)
    *and* the home screen offers "You were on step 6 of 7" → **Resume cooking**
    puts you back on that step with the swap still applied.
-8. Open **Device check** → the probes for this device, and **Copy report** for
+9. Open **Device check** → the probes for this device, and **Copy report** for
    a bug report anyone can paste.
-9. Drive the whole thing with the remote: arrows move, OK selects, Back
-   returns. Turn the network off and reload — it still opens.
-10. Close on "hands never touched the screen".
+10. Drive the whole thing with the remote: arrows move, OK selects, Back
+    returns. Turn the network off and reload — it still opens.
+11. Close on "hands never touched the screen".
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design and
 [docs/DEV_SETUP.md](docs/DEV_SETUP.md) for the development environment.

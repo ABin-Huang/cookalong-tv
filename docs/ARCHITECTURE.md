@@ -29,6 +29,8 @@ behavior consistent and easy to test.
 │  src/capabilities.js — what this device can actually do  │
 │  src/progress.js     — resume-where-you-left-off snapshots│
 │  src/servings.js     — rescaling a recipe to a new yield  │
+│  src/plan.js         — which steps name a time, and which │
+│                        one to start first                 │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -42,12 +44,13 @@ offered by Alexa come from the same function, so they cannot disagree.
 ### Fire TV Web App (`public/`)
 
 - `index.html` — home (recipe grid, diet chips, allergy chips, resume card,
-  kitchen panel) and recipe view (servings stepper, ingredient list, step card,
-  timer hint), plus the global timer list and the Device check dialog. Timers
-  live outside both views because they are state you set so you could walk away.
+  kitchen panel) and recipe view (servings stepper, ingredient list, cook plan,
+  step card, timer hint), plus the global timer list and the Device check dialog.
+  Timers live outside both views because they are state you set so you could walk
+  away.
 - `app.js` — rendering, filtering, step navigation, live swaps, yield scaling,
-  the timer rack, progress persistence, capability probing, and D-pad focus
-  handling (all four arrows, plus Back).
+  the cook plan, the timer rack, progress persistence, capability probing, and
+  D-pad focus handling (all four arrows, plus Back).
 
 The chosen yield is stored once for the whole kitchen rather than per recipe:
 how many people you are cooking for is a property of the evening, not of the
@@ -65,10 +68,11 @@ claim the code can back up without a device-linking backend.
 ### Alexa skill (`skill/`)
 
 - `index.js` — request routing only; every handler delegates to `responses.js`.
-  Handles all eighteen declared intents plus `PreviousStepIntent`:
-  Launch, StartCooking, WhatDoIHave, NextMatch, Substitute, ExcludeIngredient,
-  NextStep, PreviousStep, RepeatStep, SetTimer, CancelTimer, DietFilter,
-  SetProfile, ClearProfile, Yes, No, Help, CancelAndStop, Fallback, SessionEnded.
+  Routes the **twenty** intents declared in the interaction model — StartCooking,
+  WhatDoIHave, NextMatch, Substitute, ExcludeIngredient, NextStep, PreviousStep,
+  RepeatStep, CookPlan, SetTimer, CancelTimer, DietFilter, SetProfile,
+  ClearProfile, plus the six `AMAZON.*` built-ins — and adds LaunchRequest and
+  SessionEndedRequest.
 - `responses.js` — every speech/reprompt/APL/session decision, with no ASK
   dependency, so the whole conversation is unit-testable in plain Node.
 - `skill.json` — skill manifest for the Alexa Developer Console.
@@ -123,6 +127,13 @@ accounted for, not handed back.
   handles the list, `scaleStepText` rewrites amounts inside step prose,
   `totalNutrition` multiplies the per-serving figures out, and `factorFor` /
   `clampServings` own the yields a cook can pick.
+- `plan.js` — the cook plan: `timedSteps(steps)` returns every step that names a
+  duration with the index it came from, `longest(steps)` picks the single wait
+  worth pointing at, and `summary(steps)` counts and sums them. It reads
+  durations *through* `timer.js` rather than re-implementing the parser, so the
+  plan and the ⏱ button cannot disagree; `test/web-contract.test.js` holds
+  `index.html` to loading `plan-engine.js` after `timer-engine.js` for that
+  reason.
 
 ### Scaling is a grammar problem, not just arithmetic
 
@@ -152,6 +163,45 @@ every recipe through the scaler at ×0.5, ×2 and ×3 and fails if any time
 changes, if any amount that should have scaled did not, or if a scaled line
 contains `NaN`, `undefined` or a zero measure.
 
+## A plan before the step, not one at a time
+
+A timer rack makes parallel cooking possible; it does not make it obvious. The
+knowledge that step 6 wants 18 minutes used to arrive only when the cook walked
+to step 6 — by which point the rice was already in the pan and the pot that
+needed the head start had lost it. `plan.js` moves that knowledge to the top of
+the recipe screen: every step that names a time, how long it wants, and which
+step is the longest single wait.
+
+Three rules keep it honest:
+
+- **One parser, not two.** The plan asks `timer.js` for every duration. A second
+  reading of "what time is this step asking for" would eventually disagree with
+  the button, and the one that disagreed would be the one on screen.
+- **It reports, it does not interpret.** A step naming two times reports the
+  longest — the timer engine's documented behaviour. The sum of the named times
+  is called `namedSeconds` and is never presented as how long the dish takes:
+  chopping and plating are not timed, and two steps can run at once.
+- **Only the steps that name a time appear.** A plan row that guessed would be
+  worse than no row, because the cook would start a timer the recipe never asked
+  for.
+
+The rows start any step's timer without navigating there, which is the point:
+two pots going before the cook has left step 1, with focus left where the cook
+put it.
+
+The panel opens on a summary line and folds its rows away. Measured at
+1920×1080, five open rows push the step card 344px down the page — from 945 to
+1289, past the bottom of the screen — and the step card is the thing the cook is
+actually reading. The summary alone carries the insight ("5 of 7 steps name a
+time · longest 18 min (step 6)"), so it stays; the rows are a setup tool, so
+they wait to be asked for.
+
+Both surfaces answer the same question from the same engine: "what's the cook
+plan" on the TV, "which step takes longest" on the skill. That matters more on
+the skill than on the TV, because a Lambda invocation cannot ring later — a
+spoken timer there is a note to self at best, so knowing which step is the long
+one before the pan is hot is most of what voice can honestly deliver.
+
 ## AWS deployment (hackathon target)
 
 - Alexa skill backend: **AWS Lambda** (Node.js 18) + ASK SDK; role with
@@ -170,6 +220,9 @@ User: "Alexa, cook tomato basil pasta"
 4. User: "next step" → `NextStepIntent` increments step and speaks it.
 5. User: "set a timer for 8 minutes" → `parseDuration` → `Timer(480).start()`
    → "Timer set for 8 minutes."
+6. User: "which step takes longest" → `CookPlanIntent` → `plan.js` over the same
+   swap-rewritten steps the step flow uses → "The longest single wait is step 6,
+   18 minutes."
 
 The Fire TV app mirrors this experience visually with the same engine.
 
@@ -209,10 +262,12 @@ Two contract tests exist because the same class of bug shipped twice:
   "Sorry, something went wrong." The test now invokes every declared intent
   against the real handler and fails if any reaches the error path.
 - `test/web-contract.test.js` — a renamed element id, a script tag left out of
-  `index.html`, an engine missing from the service-worker shell, or a
-  capability guard regressing to a bare API check all fail here rather than at
-  runtime. No unit test loads `app.js`, which is exactly how a redeclared
-  identifier broke the whole web app while 71 tests stayed green.
+  `index.html`, a load order that puts `plan-engine.js` before the
+  `timer-engine.js` it resolves at load time, an engine missing from the
+  service-worker shell, or a capability guard regressing to a bare API check all
+  fail here rather than at runtime. No unit test loads `app.js`, which is exactly
+  how a redeclared identifier broke the whole web app while 71 tests stayed
+  green.
 
 Both are cheap, and both encode a specific incident rather than a general
 principle. `npm run check:syntax` is the floor beneath them.

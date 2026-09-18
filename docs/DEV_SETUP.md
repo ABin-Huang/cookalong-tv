@@ -42,8 +42,15 @@ required).
 - Use the **swap panel** under the controls to substitute a missing ingredient;
   the step text rewrites itself and **Undo** puts it back.
 - Open a match card's **Why N%?** to see the weighted scoring breakdown.
-- Click **Set timer** → Start / Pause / Reset. The timer keeps counting while
-  you browse other screens, survives a reload, and alerts you when it lands.
+- Open a recipe and press **🥘 Cook plan · Show steps** — every step that names a
+  time, with its own duration and a **⏱ Start** on each row. Press Start on the
+  long one and note that the step on screen never moved: that is how two pots get
+  going before you have left step 1.
+- Click **Set timer** on a step → Start / Pause / Stop per timer, several at
+  once, each named after its step. Timers keep counting while you browse other
+  screens, survive a reload, and alert you by name when they land.
+- Walk **Cooking for** up to 6 — amounts and step prose rewrite themselves, and
+  every duration in the cook plan stays exactly where it was.
 - Toggle **Voice on/off** in the header to silence spoken guidance.
 - Tap an allergy chip (**Leave out:**) to hide recipes that carry it.
 - Click **Device check** in the footer to see what this browser reports it can
@@ -53,8 +60,8 @@ required).
 
 `public/ingredients-engine.js`, `public/timer-engine.js`,
 `public/capabilities-engine.js`, `public/progress-engine.js`,
-`public/servings-engine.js` and `public/recipes-data.js` are **generated** from
-`src/`. Edit `src/` only, then:
+`public/servings-engine.js`, `public/plan-engine.js` and `public/recipes-data.js`
+are **generated** from `src/`. Edit `src/` only, then:
 
 ```bash
 npm run build:web    # write the public/ artifacts
@@ -63,16 +70,22 @@ npm run check:web    # verify they match src/ — runs before npm test and in CI
 
 ## Adding a generated engine
 
-The build, the syntax check, the service worker shell and the web contract test
-each keep their own list of engines, and none of them are derived from the
-others. Adding one means touching all four:
+Five places keep their own list of engines and **none are derived from the
+others**, so adding one means touching all five:
 
 1. `scripts/build-web.js` — add the `src/` → `public/` pair.
 2. `package.json` `check:syntax` — add the new `src/` file.
 3. `public/index.html` — add the `<script>` tag.
 4. `public/sw.js` — add it to `SHELL` and bump `CACHE_VERSION`.
+5. `test/web-contract.test.js` — add it to `ENGINE_SCRIPTS` and to the
+   byte-identical pairs.
 
-`test/web-contract.test.js` fails if you miss step 3 or 4, and
+If the new engine resolves another one at load time — as `plan.js` does with
+`timer.js` — its `<script>` tag must come *after* that engine's, and the
+contract test should say so. Get the order wrong and the dependent engine
+silently loads with a null dependency instead of failing loudly.
+
+`test/web-contract.test.js` fails if you miss step 3, 4 or 5, and
 `npm run check:web` fails if you forget to run the build.
 
 ## Run the tests
@@ -85,7 +98,7 @@ npm test
 Covers the recipe engine (listing, filtering, step formatting), the ingredient
 intelligence engine (matching, substitutions, pantry), the timer engine
 (duration parsing, drift-free ticking, the multi-timer rack, persistence
-round-trips), the capability probes and the serving scaler.
+round-trips), the capability probes, the serving scaler and the cook plan.
 
 ## Service worker
 
@@ -122,7 +135,7 @@ Application. Bump `CACHE_VERSION` in `sw.js` when the shell file list changes.
 cookalong-tv/
 ├── public/            # Fire TV Web App (front-end)
 ├── skill/             # Alexa skill (back-end / Lambda)
-├── src/               # shared engines (recipes, timer)
+├── src/               # shared engines (recipes, ingredients, timer, plan, …)
 ├── test/              # unit tests
 ├── docs/              # architecture & setup docs
 └── README.md
