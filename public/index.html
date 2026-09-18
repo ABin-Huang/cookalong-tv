@@ -73,6 +73,7 @@
         <li>"repeat step"</li>
         <li>"set a timer" — adds one, so several pots can run at once</li>
         <li>"what timers are running" / "pause timers"</li>
+        <li>"what's the cook plan" — the longest wait, and what to start first</li>
         <li>"filter vegan" / "vegetarian" / "gluten-free"</li>
         <li>"I'm allergic to <em>dairy</em>" — hide recipes that carry it</li>
       </ul>
@@ -97,6 +98,18 @@
         <span id="ingredients-summary" class="ingredients-summary" aria-live="polite"></span>
       </div>
       <ul id="ingredients-list" class="ingredients-list"></ul>
+    </section>
+    <!-- Mise en place comes before step one: every step that names a time, in
+         one place, so the 18-minute pot can be started before the cook has
+         walked to step 6 and discovered it. The summary line stays visible and
+         the rows fold away, so the step card is never pushed off screen. -->
+    <section id="plan-panel" class="plan-panel" aria-label="Cook plan">
+      <div class="plan-head">
+        <h4 class="plan-title">🥘 Cook plan</h4>
+        <span id="plan-summary" class="plan-summary" aria-live="polite"></span>
+        <button id="btn-plan-toggle" class="btn small plan-toggle" aria-expanded="false" aria-controls="plan-list">Show steps</button>
+      </div>
+      <ul id="plan-list" class="plan-list hidden"></ul>
     </section>
     <div id="progress" class="progress" aria-label="Step progress"></div>
     <section id="step-card" class="step-card">
@@ -163,6 +176,8 @@
   <script src="capabilities-engine.js"></script>
   <script src="progress-engine.js"></script>
   <script src="servings-engine.js"></script>
+  <!-- plan-engine reads durations through timer-engine, so it must load after it -->
+  <script src="plan-engine.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

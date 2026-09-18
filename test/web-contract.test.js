@@ -37,6 +37,7 @@ const ENGINE_SCRIPTS = {
   CookalongCapabilities: "capabilities-engine.js",
   CookalongProgress: "progress-engine.js",
   CookalongServings: "servings-engine.js",
+  CookalongPlan: "plan-engine.js",
 };
 
 test("every element app.js looks up is actually declared in index.html", () => {
@@ -70,7 +71,16 @@ test("the service worker pre-caches every script the page needs offline", () => 
 test("the offline cache version was bumped when the shell grew", () => {
   const match = /CACHE_VERSION\s*=\s*"([^"]+)"/.exec(sw);
   assert.ok(match, "the service worker must declare a cache version");
-  assert.notStrictEqual(match[1], "cookalong-v6", "the cached shell changed, so the cache must be bumped");
+  assert.notStrictEqual(match[1], "cookalong-v7", "the cached shell changed, so the cache must be bumped");
+});
+
+test("plan-engine is loaded after the engine it reads durations through", () => {
+  // plan-engine resolves window.CookalongTimer at load time, so the order in the
+  // markup is load-bearing: reverse it and the plan silently goes empty.
+  const timerAt = html.indexOf('src="timer-engine.js"');
+  const planAt = html.indexOf('src="plan-engine.js"');
+  assert.ok(timerAt !== -1 && planAt !== -1, "both engines must be loaded");
+  assert.ok(planAt > timerAt, "plan-engine.js must come after timer-engine.js in index.html");
 });
 
 test("the shipped engines are byte-identical to their src/ originals", () => {
@@ -80,6 +90,7 @@ test("the shipped engines are byte-identical to their src/ originals", () => {
     ["src/capabilities.js", "public/capabilities-engine.js"],
     ["src/progress.js", "public/progress-engine.js"],
     ["src/servings.js", "public/servings-engine.js"],
+    ["src/plan.js", "public/plan-engine.js"],
   ];
   const normalize = s => s.replace(/\r\n/g, "\n");
   pairs.forEach(([from, to]) => assert.strictEqual(

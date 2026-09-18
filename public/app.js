@@ -103,7 +103,7 @@
     $("recipe-title").textContent = currentRecipe.name;
     renderRecipeMeta();
     renderServings();
-    renderStep(); renderProgress(); renderSwaps(); renderIngredients();
+    renderStep(); renderProgress(); renderSwaps(); renderIngredients(); renderPlan();
     renderRecipeAllergens(); renderTimers();
     window.scrollTo(0, 0);
     returnFocusId = id;
@@ -427,6 +427,9 @@
     $("step-text").textContent = scaledSteps()[currentStep];
     renderStepTimerHint();
     renderProgress();
+    // The plan's rows quote the step prose, so they follow the amounts. Their
+    // durations do not move — that is the whole point of scaling and is tested.
+    renderPlan();
   }
 
   function changeServings(delta) {
@@ -488,6 +491,141 @@
     }
   }
 
+  /* ---------------- The cook plan: every pot, and how long it wants --------- */
+
+  const PLAN = window.CookalongPlan || null;
+
+  /**
+   * Whether the plan's rows are showing. Collapsed is the default because the
+   * summary line is the insight and the rows are a setup tool: leaving five rows
+   * open above the step card pushes the thing the cook is actually reading off a
+   * 10-foot screen. Once opened it stays open for the session — a cook who
+   * unfolded it meant it.
+   */
+  let planOpen = false;
+
+  function setPlanOpen(open) {
+    planOpen = !!open;
+    const list = $("plan-list");
+    const toggle = $("btn-plan-toggle");
+    if (!list || !toggle) return;
+    list.classList.toggle("hidden", !planOpen);
+    toggle.textContent = planOpen ? "Hide steps" : "Show steps";
+    toggle.setAttribute("aria-expanded", planOpen ? "true" : "false");
+  }
+
+  /**
+   * Every step of this recipe that names a time, in one list.
+   *
+   * Cooking is parallel and the timer rack already allows it — but only for a
+   * cook who knows which steps have a clock on them, and that knowledge used to
+   * arrive one step at a time behind a Next press. Which is precisely why the
+   * 18-minute braise got discovered with everything else already going. This puts
+   * the whole cook on one screen and lets any row be started from here.
+   *
+   * The numbers are the step's own, read by the same parser the ⏱ button uses —
+   * the longest wait the step names, "per side" doubled. Nothing is summed into a
+   * duration the recipe never stated, and the summary says "name a time" rather
+   * than "takes", because chopping is not timed.
+   */
+  function renderPlan() {
+    const panel = $("plan-panel");
+    const list = $("plan-list");
+    if (!panel || !list) return;
+    if (!currentRecipe || !PLAN) { panel.classList.add("hidden"); return; }
+
+    const plan = PLAN.summary(scaledSteps());
+    panel.classList.toggle("hidden", !plan.timedCount);
+    if (!plan.timedCount) { list.innerHTML = ""; return; }
+    setPlanOpen(planOpen);   // keep the toggle and the list agreeing with each other
+
+    const longest = plan.longest;
+    $("plan-summary").textContent =
+      `${plan.timedCount} of ${plan.totalCount} steps name a time · longest ${shortDuration(longest.seconds)} (step ${longest.index + 1})`;
+
+    list.innerHTML = "";
+    plan.steps.forEach(entry => {
+      const row = document.createElement("li");
+      row.className = "plan-row";
+      row.dataset.step = String(entry.index);
+      row.tabIndex = 0;
+      row.setAttribute("role", "button");
+      row.setAttribute("aria-label", `Go to step ${entry.index + 1}`);
+      if (longest && entry.index === longest.index) row.classList.add("longest");
+
+      const stepTag = document.createElement("span");
+      stepTag.className = "plan-step";
+      stepTag.textContent = `Step ${entry.index + 1}`;
+
+      const time = document.createElement("span");
+      time.className = "plan-time";
+      time.textContent = shortDuration(entry.seconds);
+
+      const text = document.createElement("span");
+      text.className = "plan-text";
+      text.textContent = entry.text;
+
+      const start = document.createElement("button");
+      start.type = "button";
+      start.className = "btn small plan-start";
+      start.dataset.action = "start";
+      start.dataset.step = String(entry.index);
+      start.textContent = `⏱ ${shortDuration(entry.seconds)}`;
+
+      row.append(stepTag, time, text, start);
+      list.appendChild(row);
+    });
+    syncPlanTimerFlags();
+  }
+
+  /**
+   * Show which rows already have a timer without rebuilding them. This runs on
+   * every rack change — so once a second while anything counts — and rebuilding
+   * would take the remote's focus with it, the same trap the timer list was
+   * fixed for.
+   */
+  function syncPlanTimerFlags() {
+    document.querySelectorAll("#plan-list .plan-row").forEach(row => {
+      const index = Number(row.dataset.step);
+      const button = row.querySelector("button[data-action='start']");
+      if (!button) return;
+      const label = stepTimerLabel(index);
+      const entry = (rack && label) ? rack.findByLabel(label) : null;
+      row.classList.toggle("timing", !!entry);
+
+      const seconds = suggestedTimerSeconds(index);
+      const text = entry
+        ? (entry.timer.state === "running" ? `⏱ ${fmt(entry.timer.remainingSeconds)}` : "⏱ Restart")
+        : `⏱ ${shortDuration(seconds)}`;
+      if (button.textContent !== text) button.textContent = text;
+      button.setAttribute("aria-label", entry
+        ? `Restart the timer on step ${index + 1}`
+        : `Start a ${shortDuration(seconds)} timer for step ${index + 1}`);
+    });
+  }
+
+  /**
+   * Open a planned step, keeping the yield and the swaps already applied — the
+   * plan is a shortcut into the same screen, not a separate mode.
+   */
+  function goToStep(index) {
+    if (!currentRecipe) return;
+    const total = scaledSteps().length;
+    currentStep = Math.max(0, Math.min(index, total - 1));
+    renderStep();
+    // renderStep has just relabelled the button with this step's own time, so
+    // focus lands on the action rather than back in the list.
+    focusEl($("btn-timer"));
+  }
+
+  /** One delegated handler for the whole plan, so the rows stay disposable. */
+  function onPlanClick(event) {
+    const button = event.target.closest("button[data-action='start']");
+    if (button) { addStepTimer(Number(button.dataset.step), false); return; }
+    const row = event.target.closest(".plan-row");
+    if (row) goToStep(Number(row.dataset.step));
+  }
+
   /** Recipe step text with any applied swaps rewritten in. */
   function displaySteps() {
     if (!currentRecipe) return [];
@@ -532,16 +670,18 @@
   /**
    * The time the current step itself is asking for ("simmer for 18 minutes").
    * This is what lets the timer follow the recipe instead of a fixed default.
+   * Takes a step index so the cook plan can ask about a step that is not on
+   * screen — the whole point of the plan is starting the pot you are not on.
    */
-  function stepSeconds() {
+  function stepSeconds(index = currentStep) {
     if (!currentRecipe || !T || !T.stepDurationSeconds) return null;
     const steps = scaledSteps();
-    return T.stepDurationSeconds(steps[currentStep] || "");
+    return T.stepDurationSeconds(steps[index] || "");
   }
 
   /** What the ⏱ button should offer: the step's own time, else the recipe's. */
-  function suggestedTimerSeconds() {
-    return stepSeconds() || defaultTimerSeconds();
+  function suggestedTimerSeconds(index = currentStep) {
+    return stepSeconds(index) || defaultTimerSeconds();
   }
 
   function humanDuration(seconds) {
@@ -555,6 +695,14 @@
 
   function fmt(seconds) {
     return `${String(Math.floor(seconds / 60)).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
+  }
+
+  /** A plan row's duration, where there is no room for the word "minute". */
+  function shortDuration(seconds) {
+    const m = Math.floor(seconds / 60);
+    const s = seconds % 60;
+    if (!m) return `${s} sec`;
+    return s ? `${m} min ${s} sec` : `${m} min`;
   }
   function updateTimerButton() {
     const btn = $("btn-timer");
@@ -599,9 +747,9 @@
    * What a timer is timing. "Timer done" is useless when three are running, so
    * every timer carries the dish and the step it belongs to.
    */
-  function stepTimerLabel() {
+  function stepTimerLabel(index = currentStep) {
     if (!currentRecipe) return "";
-    return `${currentRecipe.name} · step ${currentStep + 1}`;
+    return `${currentRecipe.name} · step ${index + 1}`;
   }
 
   const TIMER_LABELS = { idle: "ready to start", running: "counting down", paused: "paused", done: "done" };
@@ -699,6 +847,7 @@
 
     renderTimerBadge();
     updateTimerButton();
+    syncPlanTimerFlags();
   }
 
   /**
@@ -741,14 +890,22 @@
   }
 
   /**
-   * Start a timer for the step on screen. Pressing it twice for the same step
-   * restarts that timer rather than stacking a duplicate — one step, one timer —
-   * and everything else already counting carries on untouched.
+   * Start a timer for a step. Pressing it twice for the same step restarts that
+   * timer rather than stacking a duplicate — one step, one timer — and
+   * everything else already counting carries on untouched.
+   *
+   * `index` defaults to the step on screen, but the cook plan passes the step it
+   * is starting; that is the feature: the 18-minute pot gets started from the
+   * plan before anyone has walked to step 6.
+   *
+   * `focusRow` is false when the call came from the plan. Focus belongs where the
+   * cook put it — yanking it into the timer list would undo the plan's whole
+   * advantage, which is starting two pots without losing your place.
    */
-  function addStepTimer() {
+  function addStepTimer(index = currentStep, focusRow = true) {
     if (!ensureRack()) { showToast("Timer engine not loaded.", 3000); return; }
-    const seconds = suggestedTimerSeconds();
-    const label = stepTimerLabel();
+    const seconds = suggestedTimerSeconds(index);
+    const label = stepTimerLabel(index);
     const already = label ? rack.findByLabel(label) : null;
     const entry = rack.add(seconds, label);
     if (!entry) {
@@ -760,7 +917,8 @@
     showToast(already
       ? `⏱ Restarted ${label || "the timer"} at ${fmt(seconds)}`
       : `⏱ ${label || "Timer"} — ${fmt(seconds)}`, 3500);
-    focusEl(timerRowFocus(entry.id));
+    if (focusRow) focusEl(timerRowFocus(entry.id));
+    else syncPlanTimerFlags();
   }
 
   /** The row's own Start/Pause button, so the remote lands somewhere useful. */
@@ -1173,6 +1331,27 @@
     }
     if (t.includes("repeat") || t.includes("say that again")) { if (currentRecipe) { speak(scaledSteps()[currentStep]); setVoiceStatus("Repeating step"); return; } }
     if (t.includes("read") || t.includes("speak")) { if (currentRecipe) { speak(scaledSteps()[currentStep]); return; } }
+    if (/cook plan|what'?s the plan|what is the plan|what takes longest|longest wait|what should i start/.test(t)) {
+      // The question a step-at-a-time recipe cannot answer: what is actually
+      // going to take the longest, and which pot should go on first.
+      if (!currentRecipe || !PLAN) {
+        setVoiceStatus("Open a recipe and I'll lay out its timed steps");
+        speak("Open a recipe first, and I will lay out the steps that name a time.");
+        return;
+      }
+      const plan = PLAN.summary(scaledSteps());
+      if (!plan.timedCount) {
+        setVoiceStatus("This recipe names no cooking times");
+        speak(`${currentRecipe.name} does not name a cooking time in any step.`);
+        return;
+      }
+      const long = plan.longest;
+      setVoiceStatus(`${plan.timedCount} timed steps — longest ${shortDuration(long.seconds)} on step ${long.index + 1}`);
+      speak(`${plan.timedCount} of ${plan.totalCount} steps name a time, and the times they name add up to ` +
+        `${humanDuration(plan.namedSeconds)}. The longest single wait is step ${long.index + 1}. ` +
+        `Any of them can be started from the cook plan.`);
+      return;
+    }
     if (t.includes("timer")) {
       if (t.includes("set") || t.includes("add") || t.includes("start a")) {
         const secs = suggestedTimerSeconds();
@@ -1684,6 +1863,24 @@
   $("btn-prev").addEventListener("click", () => { if (currentStep > 0) { currentStep -= 1; renderStep(); } });
   $("btn-next").addEventListener("click", () => { if (currentStep < scaledSteps().length - 1) { currentStep += 1; renderStep(); } });
   $("btn-timer").addEventListener("click", addStepTimer);
+  $("btn-plan-toggle").addEventListener("click", () => {
+    setPlanOpen(!planOpen);
+    if (planOpen) {
+      // Opening it is a request to use it, so land on the first pot's Start.
+      const first = document.querySelector("#plan-list .plan-start");
+      if (first) focusEl(first);
+    }
+  });
+  $("plan-list").addEventListener("click", onPlanClick);
+  $("plan-list").addEventListener("keydown", e => {
+    // A row is a button as far as the remote is concerned, so OK has to work on
+    // it — unless the press was meant for the row's own Start button.
+    if (e.key !== "Enter" && e.key !== " ") return;
+    const row = e.target.closest(".plan-row");
+    if (!row || e.target.closest("button")) return;
+    e.preventDefault();
+    goToStep(Number(row.dataset.step));
+  });
   $("timer-list").addEventListener("click", onTimerRowClick);
   $("btn-timer-pause-all").addEventListener("click", () => {
     const counting = rack ? rack.running().length : 0;
