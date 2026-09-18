@@ -1262,6 +1262,9 @@
     panel.classList.toggle("hidden", !open);
     button.setAttribute("aria-expanded", String(open));
     button.textContent = open ? "Hide the list" : "What can I say?";
+    // Asking for the list is a request to read it, so bring it into view rather
+    // than leaving it below the fold of a dialog that scrolls.
+    if (open && panel.scrollIntoView) panel.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }
 
   /**
