@@ -33,6 +33,7 @@ behavior consistent and easy to test.
 │                        one to start first                 │
 │  src/shopping.js     — what to buy: the recipe minus the  │
 │                        staples, the pantry and the swaps  │
+│  src/voice-commands.js — what can be said, in one table   │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -101,6 +102,9 @@ claim the code can back up without a device-linking backend.
   `stepDurationSeconds(stepText)` which reads a step's own cooking time so the
   timer can follow the recipe instead of a fixed default. `TimerRack` holds
   several timers at once — see below.
+- `voice-commands.js` — the one table of what can be said to this screen, and
+  the matcher that walks it. See
+  [One table of what you can say](#one-table-of-what-you-can-say).
 
 ### Cooking is parallel, so timers are too
 
@@ -325,6 +329,79 @@ Enter to re-ask the same kitchen does not push the answer back off the screen.
 That is worth ~145px, enough to put the ribbon, the dish and the cost badge on
 the first screen of a 720p TV.
 
+## One table of what you can say
+
+The spoken commands were taught in three places that could drift: the cheatsheet
+typed into `index.html`, an if/else chain in `app.js`, and the standing line in
+the top bar. They had already drifted, in both directions at once — the
+cheatsheet offered *"I'm allergic to dairy"* and nothing answered it, while
+*"add to my shopping list"* and *"I have a timer running"* were captured by the
+read-the-list and kitchen rules that sat above them, so two commands did
+something other than what they said. A prompt that lies is worse than no prompt:
+a cook who is told to say something, says it, and is told "I didn't catch that"
+concludes the microphone is broken, and hands-free is the whole product.
+
+So the commands live once, in `src/voice-commands.js`. Each entry carries the
+phrase the app teaches (`say`), the rule that recognises it, the screen it works
+on, and what it is for. Three things read that table: the matcher, the cheatsheet
+at the foot of the home screen, and the help view behind **💬** — so there is no
+hand-written list left to disagree with the code, and `web-contract.test.js`
+asserts the markup holds an empty `<ul>` precisely so the typed list cannot come
+back.
+
+**Order is precedence, and it is the part that is invisible in review.** The
+table is scanned top to bottom and the first entry to claim an utterance handles
+it, so the specific sits above the general: the allergy rule is first because
+*"I'm allergic to gluten"* contains the word the diet filter below it is looking
+for, and the timer block sits above the kitchen matcher because that matcher
+accepts *"I have"*. `voice-commands.test.js` feeds every entry its own examples
+and must reach the entry that taught them, and pins each known trap separately.
+
+The app's side is a map keyed by the same ids. The split is deliberate: the table
+owns how a phrase is recognised, the map owns what happens next, and an id present
+in one but not the other is answered out loud rather than silently dropped.
+
+## The conversation is state, not an event
+
+Three failures shared one root: the transcript was a three-second toast, the
+answer was a top-bar line the next command overwrote, and on a Fire TV — which
+has the speech API and no installed voice — the answer was handed to `speak()`,
+which is a deliberate no-op there, so the reply to a spoken command was thrown
+away on the device the app is built for. A cook who said something and saw
+nothing could not tell a misheard word from a broken app.
+
+So one funnel, `answer()`, writes all three: the top bar, the transcript, and the
+voice. Nothing answers on only one channel any more. The transcript is state
+alongside the shopping list — persisted, capped, shown in a **💬** panel that is a
+modal because it belongs to no one screen — and it records *what the cook said*
+as well as what was answered, from the one place a heard sentence becomes an
+action. Answers the cook did not ask for (the re-rank that follows an allergy
+change) still reach the top bar but are not logged, so the panel reads as a
+conversation rather than a log of every internal recalculation.
+
+The top bar is a four-state machine — `idle`, `listening`, `thinking`,
+`answered` — carried in a `data-state` attribute the stylesheet reads. The dot is
+a state light, not decoration: it pulsed green permanently before, which asserts
+"the microphone is live" while nothing is happening. Five bars move only while
+the microphone is genuinely open, and with `interimResults` on, the line is the
+cook's own words while they are still being said — which is what "I want to see
+that I am speaking" asked for.
+
+**The part that cannot be tested in Node is the part that was broken.** Chromium
+exposes `SpeechRecognition`, accepts `start()`, and then emits nothing at all:
+no `start`, no `result`, no `error`. Measured, not assumed — driving a live
+recognition for 3.5 seconds produced zero events. The old code wrote "Listening…
+speak a command" and left it there indefinitely. So every way a listen can end
+now ends in words: a result, a named error translated into the cook's language,
+a grace timeout for a microphone that never opened, a limit timeout for an
+utterance that never finishes, or a natural end with nothing heard. The two
+timeout paths clear the recognition themselves rather than waiting for `end`,
+because `end` is exactly the event this browser does not send — and a path that
+waits for it leaves a control that believes a session is still running, which
+makes the next tap a stop request and the microphone dead for the rest of the
+cook. The browser harness drives a real recogniser where there is one and stands
+in for one where there is not, then asserts that no path ends in silence.
+
 ## AWS deployment (hackathon target)
 
 - Alexa skill backend: **AWS Lambda** (Node.js 18) + ASK SDK; role with
@@ -408,10 +485,18 @@ Two contract tests exist because the same class of bug shipped twice:
   `timer-engine.js` it resolves at load time (or `shopping-engine.js` before the
   `servings-engine.js` and `ingredients-engine.js` it does the same with), an
   engine missing from the service-worker shell, a capability guard regressing
-  to a bare API check, or the kitchen section drifting back below the recipe grid
-  all fail here rather than at runtime. No unit test loads
+  to a bare API check, the kitchen section drifting back below the recipe grid,
+  the command table loading after the script that matches with it, or a
+  hand-typed list of spoken commands coming back into the markup — all fail here
+  rather than at runtime. No unit test loads
   `app.js`, which is exactly how a redeclared identifier broke the whole web app
   while 71 tests stayed green.
+- `test/voice-commands.test.js` — the command table is the app's promise about
+  what it can hear, so it is held to the promise rather than to its own
+  internals: every phrase the app teaches is fed back through the matcher and
+  must reach the entry that taught it, on the screen that entry is scoped to and
+  nowhere else. Three ordering traps are pinned by name because each was a real
+  mis-claim, and precedence is invisible in review.
 
 Both are cheap, and both encode a specific incident rather than a general
 principle. `npm run check:syntax` is the floor beneath them.

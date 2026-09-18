@@ -124,6 +124,48 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   microphone is only offered when the browser can actually listen. Where it
   cannot, the screen becomes the primary channel and says so. The Alexa skill
   mirrors the same engine on AWS Lambda.
+- **A conversation you can see, in a top bar that stops lying** — pressing the
+  microphone used to print "Listening… speak a command" and leave it there
+  forever, because a browser can expose `SpeechRecognition`, accept `start()`,
+  and then emit *nothing at all*: no start, no result, no error. That is what
+  Chromium does when its speech service is unreachable, and it was measured,
+  not assumed — 3.5 seconds of driving a live recognition produced zero events.
+  The top bar is now a real state machine (idle → listening → thinking →
+  answered), the dot is a state light rather than a permanently pulsing green
+  lie, five bars move only while the microphone is genuinely open, and the
+  cook's own words appear on screen while they are still being said. Every way
+  a listen can end now ends in words: a result, a named error in the cook's
+  language ("this browser could not reach its speech service"), or a timeout.
+  There is no path left that leaves the screen claiming to listen — including
+  the timeout paths themselves, which clear the session rather than trusting
+  the `end` event to arrive.
+- **The answer is on screen even when the voice is not** — every reply goes
+  through one funnel that writes the top bar, the transcript and the voice
+  together. Before, a reply was handed to `speak()` and on a Fire TV — which
+  has the API and no installed voice — that is a deliberate no-op, so the
+  answer to a spoken command was thrown away on the exact device the app is
+  built for.
+- **One table of what you can say, not three that disagree** — the commands
+  used to be taught in the cheatsheet markup, matched by a hand-written
+  if/else chain, and hinted at in the top bar. They had already drifted, in
+  both directions: the cheatsheet offered *"I'm allergic to dairy"* and no
+  branch in the chain answered it, so the one list a new cook is handed
+  contained a phrase that did nothing; *"add to my shopping list"* was claimed
+  by the read-the-list rule sitting above it, so adding read the list back; and
+  *"I have a timer running"* was claimed by the kitchen matcher. All three now
+  live in `src/voice-commands.js`, and a test feeds every entry its own
+  examples, so a phrase the app teaches is a phrase the app answers by
+  construction. Press **💬** in the top bar for the full transcript of what you
+  said and what was answered — it persists like the shopping list does — and
+  say *"what can I say"* to have the list read out.
+- **A spoken list is a list** — a recogniser hands back one sentence with
+  nothing in it to split on, and the parser used to answer it with its first
+  word: saying "chicken beef rice pasta tomato onion garlic carrot and potato"
+  matched **one** ingredient. It now walks the words and takes the longest
+  alias at each position, so "chicken thighs" and "extra firm tofu" stay whole
+  while "chicken beef" reads as two — and a run of Chinese, which has neither
+  spaces nor commas, is scanned the same way. Saying that list now reaches
+  *Tonight, cook Garlic Chicken Rice*, where before it could reach nothing.
 
 ## What's inside
 
@@ -138,6 +180,7 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
 | `src/progress.js` | Cooking-progress snapshots so a reload does not lose your place (UMD) |
 | `src/servings.js` | Serving scaling: amount arithmetic plus the noun agreement that makes a scaled recipe read as written (UMD) |
 | `src/plan.js` | Cook plan: which steps of a recipe name a time, how long the longest wait is, and which step to start first (UMD) |
+| `src/voice-commands.js` | The one table of what can be said to this screen: the phrase the app teaches, the rule that recognises it, and where it works (UMD) |
 | `src/shopping.js` | Shopping list: what a recipe still needs bought, scaled to the yield, minus the staples and the pantry, with the amounts added up only when the units match (UMD) |
 | `scripts/` | `build-web.js` syncs `src/` into `public/`; `serve.js` is the dev server |
 | `test/` | Unit tests for the recipe, ingredient, timer, capability, progress, servings, plan & shopping engines, plus two contract tests |
@@ -179,7 +222,7 @@ npm run check:web    # verify they match src/ (also runs before npm test and in 
 
 ```bash
 npm install --prefix skill   # once: the skill integration tests need ask-sdk-core
-npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 250 tests
+npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 285 tests
 ```
 
 Two of those tests exist to catch drift rather than logic, because both places
@@ -191,9 +234,19 @@ have already been burned by it once:
   declared in `index.html`, that the page loads every engine the script
   consumes, that `plan-engine.js` loads *after* the `timer-engine.js` it reads
   durations through and that `shopping-engine.js` loads *after* both engines it
-  resolves at load time, that the service worker pre-caches them, and that the
+  resolves at load time, that the service worker pre-caches them, that the
   capability guard is actually present rather than the bare API check it
-  replaced.
+  replaced, and that the list of commands the app teaches is *generated* from
+  the table rather than typed into the markup — the drift that put an
+  unimplemented phrase in front of every new cook.
+
+`test/voice-commands.test.js` holds the command table to its own promise: every
+phrase the app teaches is fed back through the matcher and must reach the
+command that taught it, on the screen that command is scoped to and nowhere
+else. The ordering traps are pinned individually, because precedence is
+invisible in review and each of them was a real mis-claim — adding to the list
+reading it back, declaring a gluten allergy filtering the catalogue, and a
+timer question being answered with a recipe search.
 
 `test/servings.test.js` is the one to read if you want to know how far the
 scaling is trusted: rather than spot-checking strings, it runs **every step of
@@ -221,14 +274,21 @@ the parts a person would actually notice are checked in a real browser, on deman
 
 ```bash
 npm start                 # terminal 1 — serves public/ on :8080
-npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 33 checks
+npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 55 checks
 ```
 
 It presses the real buttons and reads the real DOM: the panel lists and ticks, the
 badge counts down, the step card stays on screen at 1080p, focus lands inside the
 panel so a D-pad can reach it, the list survives a reload, and the console stays
-clean. Playwright is deliberately not a dependency — CI has no browser, and a test
-that cannot run is worse than no test. See `docs/DEV_SETUP.md`.
+clean. The voice block drives a real microphone where the browser has one and
+stands in for one where it does not, because the failures worth catching are only
+visible there: a microphone that never really opens has to end in words, a listen
+ended by the timeout has to leave the button usable, the transcript has to show
+both sides of the exchange, the help list on screen has to be the command table
+rather than a copy of it, and the line telling a new cook how to talk has to
+survive a 1280×720 screen uncut. Playwright is deliberately not a dependency —
+CI has no browser, and a test that cannot run is worse than no test. See
+`docs/DEV_SETUP.md`.
 
 ## What a Fire TV actually does
 
