@@ -126,6 +126,21 @@
           ]
         },
         {
+          "name": "ContinueCookingIntent",
+          "slots": [],
+          "samples": [
+            "keep cooking",
+            "carry on",
+            "carry on cooking",
+            "continue cooking",
+            "continue",
+            "resume",
+            "where was i",
+            "pick up where i left off",
+            "what was i cooking"
+          ]
+        },
+        {
           "name": "RepeatStepIntent",
           "slots": [],
           "samples": [

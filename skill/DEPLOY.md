@@ -55,11 +55,32 @@ model already live in the Console keeps the old intents until you re-upload
    Interaction Model, and enable the **Alexa Presentation Language**
    interface under Interfaces.
 
-## Optional: cross-session profile memory (DynamoDB)
+## Cross-session memory (DynamoDB)
 
 Set environment variable `DYNAMODB_TABLE=cookalong-profiles` on the Lambda and
-grant the role `dynamodb:CreateTable/Select/GetItem/PutItem`. Without it the
-skill still works, profile is session-only.
+grant the role `dynamodb:CreateTable/Select/GetItem/PutItem`. The table is
+created on the first write. Without it the skill still works — it is simply
+session-only, and every gap in the conversation throws the dish away.
+
+What survives a session ending (`skill/persistence.js`):
+
+| Key | Why |
+| --- | --- |
+| `diets`, `allergens` | Declared once, relied on forever. An answer that forgets an allergy is not a worse answer, it is a dangerous one. |
+| `lastHaves` | What is in the kitchen — the question this app is built on. "What can I make" should not require re-listing the fridge. |
+| `recipeId`, `step`, `swaps` | Where the cook was, so an interruption is a pause and not a restart. Swaps travel with it, or a resumed step quietly undoes a decision already made. |
+
+Deliberately **not** remembered: `matchIds` / `matchIndex` / `awaitingCook`.
+Those are the tail of one spoken exchange; reviving them later would make
+"cook it" start a dish nobody just discussed.
+
+An empty session writes nothing, so a cook who opens the skill and says nothing
+cannot erase the profile the previous session saved. Every persistence failure
+is logged and swallowed — losing memory degrades the skill, but throwing on
+every request because a table is missing would kill it.
+
+In the Console Test tab, `open cook along` then `keep cooking` resumes the
+interrupted step; with memory on, that works in a **new** session too.
 
 ## Voice test script (Test tab, type or speak)
 
@@ -73,7 +94,11 @@ skill still works, profile is session-only.
 7. `set a timer for 5 minutes` → spoken confirmation
 8. `which step takes longest` → "5 of 7 steps name a time… the longest single
    wait is step 6, 18 minutes — that is the one worth a timer"
-9. `help`, then `stop`
+9. `stop`, then `open cook along` again → "Welcome back… you were on step N of
+   7", then `keep cooking` → the same step returns, swaps intact. This is the
+   cross-session path, so it needs `DYNAMODB_TABLE`; without it a new session
+   legitimately starts fresh, and the skill says so instead of pretending.
+10. `help`, then `stop`
 
 ## APL testing
 

@@ -32,11 +32,18 @@ function copyDir(from, to) {
   }
 }
 
+/**
+ * The skill's own files. `persistence.js` belongs here for the same reason
+ * `responses.js` does: index.js requires it, and a file that is required but not
+ * copied is a Lambda that boots and then dies on the first request.
+ */
+const SKILL_FILES = ["index.js", "responses.js", "persistence.js", "package.json"];
+
 rmrf(DIST);
 fs.mkdirSync(DIST, { recursive: true });
 
 // 1. skill code
-for (const file of ["index.js", "responses.js", "package.json"]) {
+for (const file of SKILL_FILES) {
   fs.copyFileSync(path.join(SKILL_DIR, file), path.join(DIST, file));
 }
 copyDir(path.join(SKILL_DIR, "apl"), path.join(DIST, "apl"));
@@ -45,7 +52,8 @@ copyDir(path.join(SKILL_DIR, "apl"), path.join(DIST, "apl"));
 copyDir(SRC_DIR, path.join(DIST, "src"));
 
 // 3. rewrite require("../src/x") -> require("./src/x") inside the bundle
-for (const file of ["index.js", "responses.js"]) {
+for (const file of SKILL_FILES) {
+  if (!file.endsWith(".js")) continue;
   const p = path.join(DIST, file);
   const fixed = fs.readFileSync(p, "utf8").replace(/require\("\.\.\/src\//g, 'require("./src/');
   fs.writeFileSync(p, fixed);
@@ -53,7 +61,8 @@ for (const file of ["index.js", "responses.js"]) {
 
 // 4. sanity: no parent-directory requires remain
 const offenders = [];
-for (const file of ["index.js", "responses.js"]) {
+for (const file of SKILL_FILES) {
+  if (!file.endsWith(".js")) continue;
   if (fs.readFileSync(path.join(DIST, file), "utf8").includes('require("../')) offenders.push(file);
 }
 if (offenders.length) {

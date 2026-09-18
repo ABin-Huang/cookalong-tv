@@ -16,17 +16,29 @@
  */
 
 const Alexa = require("ask-sdk-core");
+const { DynamoDbPersistenceAdapter } = require("ask-sdk-dynamodb-persistence-adapter");
 const R = require("./responses");
+const persistence = require("./persistence");
 const { listRecipes, getRecipe } = require("../src/recipes");
 const { parseDuration, stepDurationSeconds, Timer } = require("../src/timer");
 
-const SESSION_STATE_KEY = "cookalong";
+const SESSION_STATE_KEY = persistence.SESSION_STATE_KEY;
+
+/**
+ * Cross-session memory is opt-in: without DYNAMODB_TABLE the skill behaves
+ * exactly as it did — session-only — so `npm test` and a bare Lambda still run
+ * with no AWS account. See persistence.js for what is remembered and why, and
+ * DEPLOY.md for the two lines of setup.
+ */
+const PERSIST_TABLE = process.env.DYNAMODB_TABLE || "";
 
 function state(handlerInput) {
   const attrs = handlerInput.attributesManager.getSessionAttributes();
   if (!attrs[SESSION_STATE_KEY]) attrs[SESSION_STATE_KEY] = {};
   return attrs[SESSION_STATE_KEY];
 }
+
+const store = persistence.createPersistence({ tableName: PERSIST_TABLE, sessionOf: state });
 
 function slot(handlerInput, name) {
   return Alexa.getSlotValue(handlerInput.requestEnvelope, name);
@@ -70,6 +82,16 @@ const LaunchRequestHandler = {
   canHandle(handlerInput) { return Alexa.getRequestType(handlerInput.requestEnvelope) === "LaunchRequest"; },
   handle(handlerInput) { return respond(handlerInput, R.buildLaunch(state(handlerInput))); }
 };
+
+/**
+ * "Keep cooking" — the answer to a session that ended mid-recipe.
+ *
+ * This is the intent that makes the DynamoDB layer worth having: it is the only
+ * one that means anything without the cook having said anything else first in
+ * this session.
+ */
+const ContinueCookingIntentHandler = intentHandler("ContinueCookingIntent", handlerInput =>
+  respond(handlerInput, R.buildContinueCooking(state(handlerInput))));
 
 /* ----------------------------- cooking flow ----------------------------- */
 
@@ -261,9 +283,10 @@ const ErrorHandler = {
   }
 };
 
-exports.handler = Alexa.SkillBuilders.custom()
+const skill = Alexa.SkillBuilders.custom()
   .addRequestHandlers(
     LaunchRequestHandler,
+    ContinueCookingIntentHandler,
     StartCookingIntentHandler,
     NextStepIntentHandler,
     PreviousStepIntentHandler,
@@ -289,5 +312,21 @@ exports.handler = Alexa.SkillBuilders.custom()
     FallbackIntentHandler,
     SessionEndedRequestHandler
   )
-  .addErrorHandlers(ErrorHandler)
-  .lambda();
+  .addErrorHandlers(ErrorHandler);
+
+// The adapter is what makes `getPersistentAttributes` resolvable at all; the two
+// interceptors are deliberate no-ops without it, so an unconfigured deploy keeps
+// working session-only rather than failing on every request.
+if (store.enabled) {
+  skill.withPersistenceAdapter(new DynamoDbPersistenceAdapter({
+    tableName: PERSIST_TABLE,
+    // The table is created on first write, which is why DEPLOY.md asks the
+    // Lambda role for dynamodb:CreateTable. Without that grant the skill still
+    // answers every question; it just does not remember them.
+    createTable: true
+  }));
+  skill.addRequestInterceptors(store.load);
+  skill.addResponseInterceptors(store.save);
+}
+
+exports.handler = skill.lambda();

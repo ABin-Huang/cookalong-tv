@@ -177,9 +177,76 @@ function swapDatasource(ingredient, sub, profile) {
   };
 }
 
+/* -------------------------------- resume -------------------------------- */
+
+/**
+ * The cook that was still going when the session ended.
+ *
+ * An Alexa session ends every time the cook stops talking, and cooking is
+ * nothing but pauses: check the oven, wipe the counter, come back. Held only in
+ * session attributes, every one of those gaps threw the dish away, and the
+ * answer to "next step" from someone halfway through a recipe was "you have not
+ * started a recipe yet". This is the shape that gets written to DynamoDB and
+ * read back at the start of the next session — see PERSISTED_KEYS in index.js.
+ *
+ * A cook parked on the final step is NOT resumable: the dish is finished, and
+ * offering to carry on would be help dressed up as a lie.
+ */
+function resumableCook(session) {
+  const recipe = session && session.recipeId ? getRecipe(session.recipeId) : null;
+  if (!recipe) return null;
+  const steps = rewrittenSteps(recipe, session.swaps);
+  if (steps.length < 2) return null;
+  const step = Math.max(0, Math.min(Math.round(Number(session.step) || 0), steps.length - 1));
+  if (step >= steps.length - 1) return null;
+  return { recipe, step, total: steps.length };
+}
+
+/**
+ * "Keep cooking" — set the cook back down exactly where they left it.
+ *
+ * The swaps come back with it, so the step text spoken here is the swapped one
+ * the cook already agreed to, not the original that would silently undo a
+ * decision they made twenty minutes ago.
+ */
+function buildContinueCooking(session) {
+  const at = resumableCook(session);
+  if (!at) {
+    return {
+      speech: "<speak>There is no recipe in progress. Tell me what is in your fridge, or name a dish to cook.</speak>",
+      reprompt: "Tell me the ingredients you have."
+    };
+  }
+  const steps = rewrittenSteps(at.recipe, session.swaps);
+  const swapped = Object.keys(session.swaps || {}).length
+    ? " Your swaps are still applied."
+    : "";
+  return {
+    speech: `<speak>Back to ${at.recipe.name}, step ${at.step + 1} of ${at.total}. ` +
+      `<break time="140ms"/>${steps[at.step]}${swapped}</speak>`,
+    reprompt: 'Say "next step" when ready.',
+    document: APL.cooking,
+    datasource: cookingDatasource(at.recipe, at.step, session.swaps, "Picked up where you left off.")
+  };
+}
+
 /* -------------------------------- launch -------------------------------- */
 
 function buildLaunch(session) {
+  // Offer the interrupted cook before clearing it. To walk back into the kitchen
+  // and be told "you have not started a recipe yet" is the app forgetting the
+  // one thing it was holding — so the wipe below only happens when there is
+  // genuinely nothing to come back to.
+  const at = resumableCook(session);
+  if (at) {
+    return {
+      speech:
+        `<speak>Welcome back. You were on step ${at.step + 1} of ${at.total} of ${at.recipe.name}.` +
+        `${profileClause(session)} ` +
+        `Say <break time="80ms"/> keep cooking, to pick it up, or name another dish.</speak>`,
+      reprompt: 'Say "keep cooking" to carry on, or name a dish.'
+    };
+  }
   session.recipeId = null;
   session.step = 0;
   return {
@@ -725,6 +792,8 @@ const FALLBACK_SPEECH =
 module.exports = {
   APL,
   buildLaunch,
+  buildContinueCooking,
+  resumableCook,
   buildStartCooking,
   buildWhatDoIHave,
   buildNextMatch,

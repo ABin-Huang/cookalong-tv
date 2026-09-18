@@ -7,7 +7,7 @@
     "pretest": "npm run check:syntax && node scripts/build-web.js --check",
     "test": "node --test --test-force-exit",
     "test:unit": "node --test --test-force-exit test/recipes.test.js test/timer.test.js",
-    "check:syntax": "node --check public/app.js && node --check public/sw.js && node --check src/recipes.js && node --check src/ingredients.js && node --check src/timer.js && node --check src/capabilities.js && node --check src/progress.js && node --check src/servings.js && node --check src/plan.js && node --check src/shopping.js && node --check src/voice-commands.js && node --check skill/index.js && node --check skill/responses.js",
+    "check:syntax": "node --check public/app.js && node --check public/sw.js && node --check src/recipes.js && node --check src/ingredients.js && node --check src/timer.js && node --check src/capabilities.js && node --check src/progress.js && node --check src/servings.js && node --check src/plan.js && node --check src/shopping.js && node --check src/agent.js && node --check src/voice-commands.js && node --check skill/index.js && node --check skill/responses.js && node --check skill/persistence.js",
     "build:web": "node scripts/build-web.js",
     "check:web": "node scripts/build-web.js --check",
     "verify:browser": "node scripts/verify-browser.js",
