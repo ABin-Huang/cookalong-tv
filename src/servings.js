@@ -457,6 +457,10 @@
     agreeUnit,
     agreementForm,
     parseQty,
+    // Exported because "what does this amount count?" is the same question the
+    // shopping list asks when it decides whether two amounts are the same kind
+    // of thing and may therefore be added up.
+    headInQuantity,
     factorFor,
     clampServings,
     scaleQty,
