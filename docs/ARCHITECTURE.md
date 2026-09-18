@@ -31,6 +31,8 @@ behavior consistent and easy to test.
 │  src/servings.js     — rescaling a recipe to a new yield  │
 │  src/plan.js         — which steps name a time, and which │
 │                        one to start first                 │
+│  src/shopping.js     — what to buy: the recipe minus the  │
+│                        staples, the pantry and the swaps  │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -45,12 +47,13 @@ offered by Alexa come from the same function, so they cannot disagree.
 
 - `index.html` — home (recipe grid, diet chips, allergy chips, resume card,
   kitchen panel) and recipe view (servings stepper, ingredient list, cook plan,
-  step card, timer hint), plus the global timer list and the Device check dialog.
-  Timers live outside both views because they are state you set so you could walk
-  away.
+  step card, timer hint), plus the global timer list, the global shopping list and
+  the Device check dialog. Timers and the shopping list both live outside the two
+  views because neither belongs to one recipe: you set a timer so you could walk
+  away, and you build a shopping list across whatever you plan to cook.
 - `app.js` — rendering, filtering, step navigation, live swaps, yield scaling,
-  the cook plan, the timer rack, progress persistence, capability probing, and
-  D-pad focus handling (all four arrows, plus Back).
+  the cook plan, the shopping list, the timer rack, progress persistence,
+  capability probing, and D-pad focus handling (all four arrows, plus Back).
 
 The chosen yield is stored once for the whole kitchen rather than per recipe:
 how many people you are cooking for is a property of the evening, not of the
@@ -68,9 +71,10 @@ claim the code can back up without a device-linking backend.
 ### Alexa skill (`skill/`)
 
 - `index.js` — request routing only; every handler delegates to `responses.js`.
-  Routes the **twenty** intents declared in the interaction model — StartCooking,
-  WhatDoIHave, NextMatch, Substitute, ExcludeIngredient, NextStep, PreviousStep,
-  RepeatStep, CookPlan, SetTimer, CancelTimer, DietFilter, SetProfile,
+  Routes the **twenty-three** intents declared in the interaction model —
+  StartCooking, WhatDoIHave, NextMatch, Substitute, ExcludeIngredient, NextStep,
+  PreviousStep, RepeatStep, CookPlan, ShoppingList, AddToShoppingList,
+  ClearShoppingList, SetTimer, CancelTimer, DietFilter, SetProfile,
   ClearProfile, plus the six `AMAZON.*` built-ins — and adds LaunchRequest and
   SessionEndedRequest.
 - `responses.js` — every speech/reprompt/APL/session decision, with no ASK
@@ -134,6 +138,13 @@ accounted for, not handed back.
   plan and the ⏱ button cannot disagree; `test/web-contract.test.js` holds
   `index.html` to loading `plan-engine.js` after `timer-engine.js` for that
   reason.
+- `shopping.js` — what to buy. `itemsToBuy(recipe, {servings, have, profile})`
+  returns the lines worth a trip to the shop, `addItems` folds a second dish's
+  needs into the list already built, and `speak` turns the whole thing into one
+  sentence with the units expanded ("400 grams"), because a shopping list gets
+  read aloud more often than it gets read. It resolves `servings.js` and
+  `ingredients.js` at load time, so `test/web-contract.test.js` holds the script
+  order for it too.
 
 ### Scaling is a grammar problem, not just arithmetic
 
@@ -202,6 +213,62 @@ the skill than on the TV, because a Lambda invocation cannot ring later — a
 spoken timer there is a note to self at best, so knowing which step is the long
 one before the pan is hot is most of what voice can honestly deliver.
 
+## A shopping list is not an ingredient list
+
+The ingredient list and the shopping list look alike and are computed almost
+oppositely, which is why they are two engines rather than one function with a
+flag. Turning one into the other means subtracting three things and surviving one
+that cannot be subtracted at all.
+
+**The staples go first.** A recipe marks salt, pepper and cooking oil as on hand,
+and the matcher already scores them as on hand ("pantry staples are assumed on
+hand"). A list that told you to buy salt for a dish whose own card said you had
+everything would contradict the score that sent you there, so `pantry: true`
+ingredients are dropped — unless the cook asks for them by saying they are
+shopping for an empty kitchen.
+
+**Then the pantry.** What the cook has saved, plus the ingredient set of the match
+they came in from, is subtracted. That set is also what makes the third
+subtraction possible:
+
+**Then the swaps they already own.** For each missing ingredient the engine asks
+`ingredients.js` for the compatible substitutions and checks whether the cook owns
+one. This is the link between the two halves of the app: the swap panel says a
+missing ingredient *can* be replaced, and this says whether it already has been.
+"Buy parmesan" and "skip the parmesan, you own nutritional yeast" are different
+errands. The check goes through the same fail-closed option list as the panel, so
+the advice can never cross an allergen — there is a test for exactly that.
+
+**And what cannot be subtracted is the amount.** The corpus is full of amounts
+that are not numbers: "to taste", "to serve", "a handful", "to drizzle". Adding
+those up would produce a figure nobody could shop from, so they are carried
+through in the recipe's own words, labelled "as needed", and never summed. The
+same rule governs units: 400g of tomatoes plus 2 tomatoes stays two lines, because
+402 of nothing is not a shopping list. Merging happens only when the unit matches,
+and the test sweeps all ten recipes to hold that.
+
+The one addition that is real is a scaling. `addQty("3 cloves", "2 cloves")` grows
+the first amount by `(3 + 2) / 3` and hands it to `servings.js`, so a merged line
+renders through the same rounding and the same noun agreement as a recipe scaled
+to a new yield — "5 garlic cloves", not "5 garlic clove". That is why
+`headInQuantity` is exported from `servings.js`: the shopping list has to answer
+"what does this amount count?" with the same answer the scaler does.
+
+Adding a dish is therefore idempotent by construction rather than by a
+de-duplication pass. Each line stores what each dish asks for rather than a
+running total, and re-derives its own amount from those sources. Press "add what's
+missing" twice and nothing doubles; turn the servings up and press it again and
+the amount is *corrected* rather than piled on, and the line goes back to un-bought
+because there is now more to buy. A running total cannot do either — it was the
+first version of this engine, and the test that caught it is still there.
+
+Both surfaces call the same engine with the same inputs, so the list the skill
+reads out cannot disagree with the list the TV draws. On the skill, the list lives
+in session attributes and lasts the conversation — an honest limit, and the same
+one the spoken timer has. When the skill is asked what is missing and has not been
+told what is in the kitchen, it asks instead of assuming: a list built on an
+invented kitchen sends someone out to buy what they already own.
+
 ## AWS deployment (hackathon target)
 
 - Alexa skill backend: **AWS Lambda** (Node.js 18) + ASK SDK; role with
@@ -223,8 +290,27 @@ User: "Alexa, cook tomato basil pasta"
 6. User: "which step takes longest" → `CookPlanIntent` → `plan.js` over the same
    swap-rewritten steps the step flow uses → "The longest single wait is step 6,
    18 minutes."
+7. User: "I have garlic and spaghetti" → `WhatDoIHaveIntent` →
+   `ingredients.js` scores every recipe; the owned set is stored on the session.
+   (Naming tomatoes too is also a valid kitchen — it just leaves less to buy,
+   which is the point: the list answers to what you actually have.)
+8. User: "add what's missing" → `AddToShoppingListIntent` → `shopping.js` over
+   that same session state, minus the recipe's pantry staples → "Added 2 items
+   for Tomato Basil Pasta. 2 things to buy: 400 grams crushed tomatoes, fresh
+   basil leaves, a handful."
+9. User: "read my shopping list" → `ShoppingListIntent` → the same
+   `shopping.js` list, read aloud — "2 things to buy: 400 grams crushed
+   tomatoes, fresh basil leaves, a handful." Asking again does not buy twice:
+   re-adding a dish corrects the amount rather than doubling it.
 
-The Fire TV app mirrors this experience visually with the same engine.
+Note the amounts in 8 and 9: `400 grams` came from the recipe scaled by the
+servings, and `a handful` is kept in the recipe's own words because it is not a
+number. The list never sums across units and never invents a total for an
+amount nobody could measure.
+
+The Fire TV app mirrors this experience visually with the same engine, and step 8
+is literally the same call: the panel's **🛒 Add what's missing** button passes the
+same recipe, the same servings and the same owned set to the same function.
 
 ## Device capability: measured, not assumed
 
@@ -263,11 +349,12 @@ Two contract tests exist because the same class of bug shipped twice:
   against the real handler and fails if any reaches the error path.
 - `test/web-contract.test.js` — a renamed element id, a script tag left out of
   `index.html`, a load order that puts `plan-engine.js` before the
-  `timer-engine.js` it resolves at load time, an engine missing from the
-  service-worker shell, or a capability guard regressing to a bare API check all
-  fail here rather than at runtime. No unit test loads `app.js`, which is exactly
-  how a redeclared identifier broke the whole web app while 71 tests stayed
-  green.
+  `timer-engine.js` it resolves at load time (or `shopping-engine.js` before the
+  `servings-engine.js` and `ingredients-engine.js` it does the same with), an
+  engine missing from the service-worker shell, or a capability guard regressing
+  to a bare API check all fail here rather than at runtime. No unit test loads
+  `app.js`, which is exactly how a redeclared identifier broke the whole web app
+  while 71 tests stayed green.
 
 Both are cheap, and both encode a specific incident rather than a general
 principle. `npm run check:syntax` is the floor beneath them.

@@ -80,6 +80,21 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   uses — there is one answer to "what time is this step asking for", not two.
   Scaling the yield leaves every planned duration identical, and the plan's own
   tests hold it to that across all ten recipes.
+- **A shopping list that knows what you already own** — a recipe's ingredient
+  list is not a shopping list. It includes the salt sitting in your cupboard, it
+  is written for the recipe's own yield rather than the pot in front of you, and
+  two dishes that both want garlic want one amount of garlic between them. Press
+  **🛒 Add what's missing** on a recipe, or on any card in the kitchen panel, and
+  you get the purchase rather than the ingredient list: the staples the recipe
+  assumes you have are left off, whatever is in your pantry is left off, the
+  amounts follow the servings stepper, and a second dish adds to the first
+  instead of starting again. Press it twice and nothing doubles. Amounts are only
+  ever added up when the unit matches — 400g of tomatoes plus 2 tomatoes stays
+  two lines, because 402 of nothing is not a shopping list — and an amount that
+  is not a number is labelled "as needed" instead of being given an invented
+  total. Every line also names the swap you already own ("or use your olive
+  oil"), so a missing ingredient can be skipped rather than bought. The list is
+  global state like the timers, and persists across reloads.
 - **Works offline** — a service worker pre-caches the app shell, so the kitchen
   UI still opens with no network.
 - **Honest scoring** — every match can explain itself: which ingredients
@@ -104,8 +119,9 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
 | `src/progress.js` | Cooking-progress snapshots so a reload does not lose your place (UMD) |
 | `src/servings.js` | Serving scaling: amount arithmetic plus the noun agreement that makes a scaled recipe read as written (UMD) |
 | `src/plan.js` | Cook plan: which steps of a recipe name a time, how long the longest wait is, and which step to start first (UMD) |
+| `src/shopping.js` | Shopping list: what a recipe still needs bought, scaled to the yield, minus the staples and the pantry, with the amounts added up only when the units match (UMD) |
 | `scripts/` | `build-web.js` syncs `src/` into `public/`; `serve.js` is the dev server |
-| `test/` | Unit tests for the recipe, ingredient, timer, capability, progress, servings & plan engines, plus two contract tests |
+| `test/` | Unit tests for the recipe, ingredient, timer, capability, progress, servings, plan & shopping engines, plus two contract tests |
 
 ## Quick start (web app)
 
@@ -130,7 +146,8 @@ the app refusing to pretend.
 
 `public/ingredients-engine.js`, `public/timer-engine.js`,
 `public/capabilities-engine.js`, `public/progress-engine.js`,
-`public/servings-engine.js`, `public/plan-engine.js` and
+`public/servings-engine.js`, `public/plan-engine.js`,
+`public/shopping-engine.js` and
 `public/recipes-data.js` are generated from `src/`. Never edit them by hand —
 change `src/` and re-sync:
 
@@ -143,18 +160,19 @@ npm run check:web    # verify they match src/ (also runs before npm test and in 
 
 ```bash
 npm install --prefix skill   # once: the skill integration tests need ask-sdk-core
-npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 212 tests
+npm test                     # syntax-checks the entry points, verifies src/public sync, then runs 250 tests
 ```
 
-Four of those tests exist to catch drift rather than logic, because every place
-has already been burned by it once:
+Two of those tests exist to catch drift rather than logic, because both places
+have already been burned by it once:
 
 - `test/skill-contract.test.js` invokes every intent declared in the interaction
   model and fails if any reaches the error handler.
 - `test/web-contract.test.js` checks that every element `app.js` looks up is
   declared in `index.html`, that the page loads every engine the script
   consumes, that `plan-engine.js` loads *after* the `timer-engine.js` it reads
-  durations through, that the service worker pre-caches them, and that the
+  durations through and that `shopping-engine.js` loads *after* both engines it
+  resolves at load time, that the service worker pre-caches them, and that the
   capability guard is actually present rather than the bare API check it
   replaced.
 
@@ -169,6 +187,29 @@ check: that the plan of every shipped recipe is exactly the steps that name a
 time (pinned as a table, so an edit that changes the cook-visible plan has to
 say so), and that neither rescaling the yield nor swapping an ingredient ever
 moves a single planned duration.
+
+`test/shopping.test.js` is where the promises that make a shopping list worth
+trusting are kept, and every one of them is a refusal: no line is ever both a
+number and "as needed", no merge across all ten recipes ever mixes two units or
+invents a total, and adding a dish twice never doubles the shopping. It also pins
+each recipe's list as a table the way the cook plan is pinned, holds the merge to
+being order-independent, and checks that the substitution advice it offers can
+never cross an allergen.
+
+None of that loads `public/app.js`, though — the unit tests run the engines in
+Node, and the web app is a DOM, a stylesheet and a remote-control focus model. So
+the parts a person would actually notice are checked in a real browser, on demand:
+
+```bash
+npm start                 # terminal 1 — serves public/ on :8080
+npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 23 checks
+```
+
+It presses the real buttons and reads the real DOM: the panel lists and ticks, the
+badge counts down, the step card stays on screen at 1080p, focus lands inside the
+panel so a D-pad can reach it, the list survives a reload, and the console stays
+clean. Playwright is deliberately not a dependency — CI has no browser, and a test
+that cannot run is worse than no test. See `docs/DEV_SETUP.md`.
 
 ## What a Fire TV actually does
 
@@ -262,14 +303,21 @@ unnoticed.
    Point out what does *not* move: "stirring often, for about 18 minutes" is
    still 18 minutes, every duration in the cook plan is identical, and the header
    now quotes in-total calories because that is what is in the pan.
-8. Reload the page. Both timers come back (paused, with the time they had left)
+8. Still at six servings, press **🛒 Add what's missing** → the shopping list
+   appears with the purchase and nothing else: no salt, no olive oil, no pantry
+   items, and every amount written for six people. Open the stir-fry and press it
+   again — the garlic becomes one line of 5 cloves for two dishes, not two lines.
+   Point at the line marked **as needed** and at the one offering "or use your
+   olive oil": the list says what to buy, and where you need not buy anything.
+9. Reload the page. Both timers come back (paused, with the time they had left)
    *and* the home screen offers "You were on step 6 of 7" → **Resume cooking**
-   puts you back on that step with the swap still applied.
-9. Open **Device check** → the probes for this device, and **Copy report** for
-   a bug report anyone can paste.
-10. Drive the whole thing with the remote: arrows move, OK selects, Back
+   puts you back on that step with the swap still applied. The shopping list is
+   still there too: it outlives the recipe it was built from.
+10. Open **Device check** → the probes for this device, and **Copy report** for
+    a bug report anyone can paste.
+11. Drive the whole thing with the remote: arrows move, OK selects, Back
     returns. Turn the network off and reload — it still opens.
-11. Close on "hands never touched the screen".
+12. Close on "hands never touched the screen".
 
 See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design and
 [docs/DEV_SETUP.md](docs/DEV_SETUP.md) for the development environment.

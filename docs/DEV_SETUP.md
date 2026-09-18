@@ -60,7 +60,8 @@ required).
 
 `public/ingredients-engine.js`, `public/timer-engine.js`,
 `public/capabilities-engine.js`, `public/progress-engine.js`,
-`public/servings-engine.js`, `public/plan-engine.js` and `public/recipes-data.js`
+`public/servings-engine.js`, `public/plan-engine.js`,
+`public/shopping-engine.js` and `public/recipes-data.js`
 are **generated** from `src/`. Edit `src/` only, then:
 
 ```bash
@@ -80,10 +81,12 @@ others**, so adding one means touching all five:
 5. `test/web-contract.test.js` — add it to `ENGINE_SCRIPTS` and to the
    byte-identical pairs.
 
-If the new engine resolves another one at load time — as `plan.js` does with
-`timer.js` — its `<script>` tag must come *after* that engine's, and the
-contract test should say so. Get the order wrong and the dependent engine
-silently loads with a null dependency instead of failing loudly.
+If the new engine resolves another one at load time, its `<script>` tag must come
+*after* that engine's, and the contract test should assert it. Two engines already
+do this: `plan.js` resolves `timer.js`, and `shopping.js` resolves both
+`servings.js` and `ingredients.js`. Get the order wrong and the dependent engine
+silently loads with a null dependency instead of failing loudly — the plan goes
+empty, and the shopping list loses its amounts.
 
 `test/web-contract.test.js` fails if you miss step 3, 4 or 5, and
 `npm run check:web` fails if you forget to run the build.
@@ -98,7 +101,47 @@ npm test
 Covers the recipe engine (listing, filtering, step formatting), the ingredient
 intelligence engine (matching, substitutions, pantry), the timer engine
 (duration parsing, drift-free ticking, the multi-timer rack, persistence
-round-trips), the capability probes, the serving scaler and the cook plan.
+round-trips), the capability probes, the serving scaler, the cook plan and the
+shopping list.
+
+The two engines whose behaviour is a *promise to the cook* rather than a
+calculation are held to it by sweeping the whole recipe corpus instead of
+spot-checking strings: `test/plan.test.js` checks that neither rescaling nor
+swapping ever moves a planned duration, and `test/shopping.test.js` checks that
+no merge ever mixes two units, invents a total, or doubles a list when the same
+dish is added twice.
+
+### Browser checks (opt-in)
+
+Unit tests run the engines in Node, but the web app is a DOM, a stylesheet and a
+remote-control focus model, and **nothing in `npm test` ever loads
+`public/app.js`**. A 10-point font, a button that pushes the step card below the
+fold on a 1080p screen, focus that lands outside the panel so the D-pad cannot
+reach it — none of that shows up in a unit test. So it is checked in a real
+browser:
+
+```bash
+npm start                 # terminal 1 — serves public/ on :8080
+npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080
+```
+
+It presses the real buttons and reads the real DOM: the shopping panel lists and
+ticks, the badge counts down, the step card stays on screen, focus lands in the
+panel, the list survives a reload, and there are no console errors. It exits
+non-zero on failure, so it works as a pre-demo gate.
+
+It needs `playwright`, which is deliberately **not** a dependency — CI runs on a
+bare Ubuntu runner with no browser, and a test that cannot run is worse than no
+test. Install it only if you want the browser checks:
+
+```bash
+npm i -D playwright && npx playwright install chromium
+```
+
+`scripts/verify-browser.js` lives in `scripts/` rather than `test/` on purpose:
+`node --test` treats every `.js` file under a `test/` directory as a test file,
+so a harness parked there would be picked up by `npm test` and fail wherever
+there is no browser.
 
 ## Service worker
 
@@ -136,7 +179,8 @@ cookalong-tv/
 ├── public/            # Fire TV Web App (front-end)
 ├── skill/             # Alexa skill (back-end / Lambda)
 ├── src/               # shared engines (recipes, ingredients, timer, plan, …)
-├── test/              # unit tests
+├── test/              # unit tests (plain Node — `node --test` picks up everything here)
+├── scripts/           # build-web.js, serve.js, verify-browser.js (opt-in browser checks)
 ├── docs/              # architecture & setup docs
 └── README.md
 ```
