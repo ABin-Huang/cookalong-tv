@@ -250,7 +250,37 @@ test("the conversation is shown in the top bar and written down in the panel", (
 
   // The dead end the probe found: chromium accepts start() and emits nothing at
   // all, so a listening state with no timeout is a screen that lies forever.
-  assert.match(app, /LISTEN_GRACE_MS/, "there must be a timeout for a microphone that never opens");
+  // Two deadlines, not one: a microphone that never opened has to be told apart
+  // from an utterance that is still going, or every silence costs the full wait.
+  assert.match(app, /LISTEN_START_MS/, "there must be a deadline for a microphone that never opens");
   assert.match(app, /LISTEN_LIMIT_MS/, "there must be a timeout for an utterance that never ends");
   assert.match(app, /RECOGNITION_ERRORS/, "recognition failures must be turned into words");
+});
+
+test("the microphone's liveness is measured, not inferred from the constructor", () => {
+  // The bug behind "the voice interaction is completely unusable": capability
+  // was decided by `!!SpeechRecognition`, which is true in a browser that emits
+  // zero events. Existence of the API is not evidence that it works, so the app
+  // has to record what it actually saw and act on that.
+  assert.match(app, /let voiceInputDead\s*=\s*false/,
+    "the app must carry the measured verdict about this device's recogniser");
+  assert.match(app, /voiceInputDead\s*=\s*true/,
+    "a recogniser caught never starting must be recorded as such");
+  assert.match(app, /voiceInputDead\s*=\s*false/,
+    "a recogniser that does start must be allowed to clear the verdict");
+  // And the verdict has to change what the button does, not just what it says.
+  assert.match(app, /function offerPhrasesInstead\(/,
+    "a device that cannot listen must be given the input that does work");
+  assert.match(app, /interpret\(row\.say\)/,
+    "selecting a phrase must run it through the same interpreter the microphone feeds");
+  assert.match(app, /className = "cmd-run"/,
+    "the command rows must be real controls a D-pad can land on");
+});
+
+test("a press on the microphone can interrupt the app", () => {
+  // Barge-in. Without it "stop, I meant something else" costs the whole answer.
+  assert.match(app, /speechSynthesis\.cancel\(\)/,
+    "pressing the microphone must be able to cut the app off mid-sentence");
+  assert.match(app, /ANSWER_REST_MS[\s\S]*ERROR_REST_MS/,
+    "an answer and a failure must not hold the top bar for the same length of time");
 });

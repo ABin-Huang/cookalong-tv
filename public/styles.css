@@ -133,7 +133,21 @@ body {
    the app teaches it. Nothing here is typed into the markup: index.html holds
    an empty <ul> and src/voice-commands.js fills it. */
 .cmd-scope { font-size: 16px; text-transform: uppercase; letter-spacing: .08em; color: var(--accent-2); padding: 12px 0 4px; }
-.cmd-row { padding: 3px 0; }
+.cmd-row { padding: 0; }
+/* Every row is a real button, because a Fire TV remote can only land on one.
+   Selecting a row runs its own example phrase through the same interpreter the
+   microphone feeds, so the list is a second way in to the commands rather than a
+   second implementation of them — and it is the only way in at all on a screen
+   whose microphone will not open. */
+.cmd-run {
+  display: block; width: 100%; text-align: left; font: inherit; color: inherit;
+  background: none; border: 0; border-radius: 8px; padding: 5px 10px; margin: 0 -10px;
+  cursor: pointer;
+}
+.cmd-run:hover { background: rgba(255, 255, 255, .06); }
+.cmd-run:focus-visible { outline: 3px solid var(--accent-2); outline-offset: 2px; }
+.cmd-run::after { content: " ▸"; color: var(--accent); opacity: 0; }
+.cmd-run:hover::after, .cmd-run:focus-visible::after { opacity: 1; }
 .cmd-say { color: var(--text); font-style: normal; }
 .cmd-help { color: var(--muted); }
 .cmd-help::before { content: " — "; }

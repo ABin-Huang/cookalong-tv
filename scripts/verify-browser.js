@@ -418,6 +418,17 @@ const record = (name, pass, detail) => {
     else delete window.SpeechRecognition;
   });
 
+  // A fresh document, and therefore a fresh verdict about this browser's
+  // recogniser. The app remembers that a microphone was caught never opening —
+  // that is the fix — so a check that needs the app to still be willing to try
+  // has to start from a page where nothing has failed yet. Reloading is the only
+  // honest way to say that; reaching into the app to clear the flag would be
+  // testing the flag rather than the behaviour.
+  const freshPage = async () => {
+    await page.reload({ waitUntil: "load" });
+    await page.waitForTimeout(500);
+  };
+
   // Start from a fresh load: the last thing the harness did was ask the kitchen
   // question, and an answer is deliberately allowed to stand for a few seconds.
   await page.reload({ waitUntil: "load" });
@@ -490,10 +501,56 @@ const record = (name, pass, detail) => {
       afterSilence.log.some(t => t.who === "cookalong" && /microphone/i.test(t.text)),
     `state="${afterSilence.state}" text="${afterSilence.text}"`);
 
-  // A recogniser that does open the microphone and then goes quiet is the other
-  // half of the same trap: if the timeout left the control thinking a session was
-  // still running, the next tap would be a request to stop it, and the button
-  // would be dead for the rest of the cook.
+  // The half that was missing. Saying "no microphone" is honest but useless on
+  // its own: the cook is left holding a control that has just told them it does
+  // not work. Every voice system that survives real hardware has a second input
+  // for this, and here it is the command table — whose rows run their own phrase
+  // through the same interpreter the microphone feeds.
+  const deadButton = await page.evaluate(() =>
+    ({ label: (document.getElementById("mic-label").textContent || "").trim() }));
+  record("a device that cannot listen stops offering to, and offers the list instead",
+    /phrase/i.test(deadButton.label), `button now reads "${deadButton.label}"`);
+
+  await page.click("#btn-voice");
+  await page.waitForTimeout(300);
+  const fallback = await page.evaluate(() => ({
+    open: !document.getElementById("conversation-panel").classList.contains("hidden"),
+    rows: document.querySelectorAll("#convo-help-list .cmd-run").length,
+    // A real control, not a styled <li>: a Fire TV remote can only land on one.
+    buttons: document.querySelectorAll("#convo-help-list button.cmd-run").length,
+  }));
+  record("and pressing it opens the ways in that work, without waiting to fail again",
+    fallback.open && fallback.rows > 5 && fallback.buttons === fallback.rows,
+    `open=${fallback.open} ${fallback.rows} rows, ${fallback.buttons} of them real buttons`);
+
+  // The two ways that help could become a trap, both checked. A dialog covers the
+  // page, so the microphone underneath it cannot be pressed again — the escape
+  // has to be the panel's own Close, and the press after that must retry the
+  // microphone rather than reopen the dialog forever.
+  await page.click("#btn-convo-close", { timeout: 3000 });
+  await page.waitForTimeout(250);
+  const escaped = await page.evaluate(() =>
+    document.getElementById("conversation-panel").classList.contains("hidden"));
+  record("the list it opens can be left with the Close every other dialog here has",
+    escaped === true, `panel hidden=${escaped}`);
+
+  await page.click("#btn-voice");
+  await page.waitForTimeout(300);
+  const retried = await page.evaluate(() => ({
+    open: !document.getElementById("conversation-panel").classList.contains("hidden"),
+    state: document.getElementById("voice-status").dataset.state,
+  }));
+  record("and the press after that tries the microphone again instead of reopening the list",
+    !retried.open && retried.state === "listening",
+    `panel reopened=${retried.open} state="${retried.state}"`);
+
+  // --- a recogniser that opens and then goes quiet ---------------------------
+
+  // The other half of the same trap: if the timeout left the control thinking a
+  // session was still running, the next tap would be a request to stop it, and
+  // the button would be dead for the rest of the cook. A fresh page so that the
+  // microphone is still on offer — see `freshPage`.
+  await freshPage();
   await page.evaluate(() => {
     window.SpeechRecognition = class {
       start() { if (this.onstart) setTimeout(() => this.onstart(), 40); }
@@ -535,14 +592,15 @@ const record = (name, pass, detail) => {
   //
   // Only `SpeechRecognition` is replaced, never `webkitSpeechRecognition`, so
   // that the fake cannot leak into the checks that follow through the fallback
-  // the app prefers.
+  // the app prefers. A fresh page first, so the microphone is still on offer.
+  await freshPage();
   await page.evaluate(() => {
     window.__spoken = [];
     window.speechSynthesis.speak = u => window.__spoken.push(String(u && u.text));
     window.__loopMic = { aborted: 0, stopped: 0, emitted: 0 };
     window.SpeechRecognition = class {
       start() {
-        // Silent: no start event at all, so the grace watchdog is what ends it.
+        // Silent: no start event at all, so the never-opened watchdog ends it.
         this.__timer = setTimeout(() => this.creep(), 4000);
       }
       creep() {
@@ -558,7 +616,7 @@ const record = (name, pass, detail) => {
     };
   });
   await page.click("#btn-voice");
-  await page.waitForTimeout(6000);   // past LISTEN_GRACE_MS, then into the creep
+  await page.waitForTimeout(6000);   // past LISTEN_START_MS, then into the creep
   const loop = await page.evaluate(() => ({
     mic: window.__loopMic,
     spoken: window.__spoken.slice(),
@@ -573,6 +631,14 @@ const record = (name, pass, detail) => {
   await restoreRealMic();
 
   // --- the spoken path, driven end to end ----------------------------------
+
+  // A fresh page, because the check above deliberately left the app believing
+  // this browser's microphone never opens — which is true, and is the whole
+  // point of the check. The happy path below stands in for a recogniser that
+  // works, and the app will not accept one on a device it has already written
+  // off; that refusal is the fix, not an obstacle to it. Starting from an
+  // untried page is what a cook with a working microphone has.
+  await freshPage();
 
   // The headline regression: this exact phrase was printed in the cheatsheet and
   // no branch in the app answered it.
@@ -833,8 +899,10 @@ const record = (name, pass, detail) => {
   });
   record("a hands-free mode that cannot hear anything switches itself off instead of looping",
     gaveUpCleanly && gaveUp.on === "off" && gaveUp.starts >= 1 && gaveUp.starts <= 6 &&
-      /hands-free is off|免遥控/.test(gaveUp.say),
-    `body data-handsfree=${gaveUp.on} after ${gaveUp.starts} silent opens — "${gaveUp.say.slice(0, 90)}"`);
+      // Case-insensitive on purpose: the check is that the cook is told the mode
+      // ended, not where in the sentence the clause happens to land.
+      /hands-free is off|免遥控/i.test(gaveUp.say),
+    `body data-handsfree=${gaveUp.on} after ${gaveUp.starts} silent opens — "${gaveUp.say.slice(0, 140)}"`);
 
   await restoreRealMic();
   await page.evaluate(() => document.body.dataset.handsfree = "off");

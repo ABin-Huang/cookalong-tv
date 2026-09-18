@@ -1210,6 +1210,11 @@
     const at = langs.findIndex(l => l.id === voiceLang);
     voiceLang = langs[(at + 1) % langs.length].id;
     saveVoiceLang();
+    // A missing speech model is per-language, so the verdict from the last
+    // language says nothing about this one. Switching languages is a real change
+    // of circumstances and has to be allowed to clear the record.
+    voiceInputDead = false;
+    voiceInputRetry = false;
     // The answer is about the microphone, so it goes through the same funnel as
     // every other answer: spoken, on the top bar, and written down.
     answer({
@@ -1222,14 +1227,43 @@
   }
 
   /* A browser can expose SpeechRecognition, accept start(), and then emit
-   * nothing whatsoever: no start event, no result, no error. Chromium does
-   * exactly that when it cannot reach a speech service, and the old code
-   * answered it by leaving "Listening… speak a command" on the screen forever.
-   * These two timeouts are the difference between a status line and a claim:
-   * if nothing comes back within the grace period the microphone was never
-   * really open, and no single utterance should take longer than the limit. */
-  const LISTEN_GRACE_MS = 3500;
+   * nothing whatsoever: no start event, no result, no error. Chromium in
+   * headless mode does exactly that, and the old code answered it by leaving
+   * "Listening… speak a command" on the screen for three and a half seconds
+   * before admitting anything was wrong.
+   *
+   * The measurement that matters is not whether the constructor exists — it
+   * always does — but whether the recogniser EVER reports that it started.
+   * `onaudiostart` and `onstart` are the first things a working recogniser
+   * emits, within a few milliseconds of start(); a recogniser that has not said
+   * anything at all after a second is not going to. So the grace period is
+   * split in two:
+   *
+   *   LISTEN_START_MS  nothing at all yet  -> the microphone was never opened
+   *   LISTEN_LIMIT_MS  it started, so wait -> a real utterance may take this long
+   *
+   * The distinction is what turns a dead device from "wait 3.5s, fail, wait 9s
+   * more, fail again on every press" into one fast, honest, remembered answer. */
+  const LISTEN_START_MS = 1200;
   const LISTEN_LIMIT_MS = 10000;
+
+  /**
+   * How long an answer is allowed to hold the top bar before the line goes back
+   * to offering the next move.
+   *
+   * A good answer is worth re-reading, so it stays put. A failure is not: the
+   * cook understood it the moment they read it, and every further second is a
+   * second the line is not saying what to do instead. The old code gave both the
+   * same nine seconds, so a dead microphone left "No microphone is coming
+   * through" parked on screen while the sentence that actually helps — press
+   * this instead — queued up behind it.
+   */
+  const ANSWER_REST_MS = 9000;
+  const ERROR_REST_MS = 4500;
+
+  function answerRestMs(state) {
+    return state === "error" ? ERROR_REST_MS : ANSWER_REST_MS;
+  }
 
   /**
    * Hands-free: the microphone re-opens itself after every answer.
@@ -1270,6 +1304,27 @@
   let voiceSession = null;        // { final, interim, handled, live } for the one in flight
   let voiceWatchdog = null;
   let answerRestHandle = null;
+  // Measured, not assumed: this device's recogniser was opened once and never
+  // reported that it started. Once true, the microphone button stops pretending
+  // and sends the cook to the list of phrases they can select instead. See
+  // LISTEN_START_MS and `onDeaf` for how it is measured.
+  let voiceInputDead = false;
+  // The cook was told the microphone is not opening and pressed anyway. A single
+  // unlucky failure must not be permanent — speech services go down and come
+  // back — so an insistent second press gets one more honest attempt.
+  let voiceInputRetry = false;
+
+  /**
+   * Should the microphone button offer to listen?
+   *
+   * `canListen` answers "does the browser expose SpeechRecognition", which is
+   * always yes and therefore useless on its own. On a device where the
+   * recogniser has already been caught never opening, the honest answer is no —
+   * and the button has to change what it does, not just what it says.
+   */
+  function canOfferListening() {
+    return !voiceInputDead && !(capSummary && !capSummary.canListen);
+  }
 
   /**
    * The four states the top bar can be in, and what each one promises.
@@ -1407,8 +1462,22 @@
         scheduleHandsFreeRearm(left - 1, budget - HANDS_FREE_REARM_MS);
         return;
       }
-      toggleVoice();
+      toggleVoice({ rearm: true });
     }, HANDS_FREE_REARM_MS);
+  }
+
+  /**
+   * End hands-free, and say so.
+   *
+   * A mode the cook cannot see the edge of must never be switched off quietly.
+   * The line at the top is the only place the change is visible, so the sentence
+   * that ends it belongs to whatever ended it — the same sentence the caller was
+   * already writing, one clause longer, so one failure still produces one line.
+   */
+  function handsFreeEnded(why) {
+    if (!handsFree) return "";
+    setHandsFree(false);
+    return ` Hands-free is off now — ${why}`;
   }
 
   /**
@@ -1422,8 +1491,7 @@
     if (!handsFree) return "";
     handsFreeMisses += 1;
     if (handsFreeMisses < HANDS_FREE_MAX_MISSES) return "";
-    setHandsFree(false);
-    return " I could not hear anything twice in a row, so hands-free is off now — press the microphone when you are ready.";
+    return handsFreeEnded("I could not hear anything twice in a row. Press the microphone when you are ready.");
   }
 
   function setHandsFree(on) {
@@ -1442,10 +1510,12 @@
         say: "Hands-free is off. Press the microphone when you want to talk, or ask me to turn it on again.",
       };
     }
-    // A mode that re-opens a microphone cannot be turned on where there is no
-    // microphone — it would retry forever, which is exactly the failure the miss
-    // counter exists to stop. Refuse once, and say what to use instead.
-    if (!capSummary || !capSummary.canListen) {
+    // A mode that re-opens a microphone cannot be turned on where the microphone
+    // does not open — it would retry forever, which is exactly the failure the
+    // miss counter exists to stop. Refuse once, and say what to use instead.
+    // Both reasons count: a browser with no speech recognition at all, and one
+    // whose recogniser has already been caught never starting.
+    if (!capSummary || !capSummary.canListen || voiceInputDead) {
       return {
         state: "error",
         status: "No microphone on this device",
@@ -1471,6 +1541,18 @@
     "no-speech": "I did not hear anything — try again, a little closer to the microphone.",
     "language-not-supported": "This browser has no speech model for that language.",
   };
+
+  /**
+   * The failures that mean "not here, not now" rather than "try again".
+   *
+   * A page cannot fix any of these on its own: the speech service is refused for
+   * the origin, unreachable, or absent, or there is no capture device or model.
+   * They are the ones worth remembering, because re-opening the microphone on
+   * every press only replays the same failure more slowly. Deliberately absent:
+   * `not-allowed` (the cook can grant it), `no-speech` (that is a miss, not a
+   * defect), and anything unknown.
+   */
+  const UNUSABLE_RECOGNITION = ["service-not-allowed", "audio-capture", "network", "language-not-supported"];
 
   /* -- the written record --------------------------------------------------- */
 
@@ -1590,6 +1672,14 @@
    *
    * Grouped by where the command works rather than by precedence, because a
    * cook reads this to find a phrase, not to trace the matcher.
+   *
+   * Every row is SELECTABLE, and that is the point. This list used to be
+   * documentation — a paragraph of phrases you could only say. Which made it
+   * useless in the two situations it is read in: when the recogniser will not
+   * open, and on a Fire TV where the cook is holding a D-pad. A row runs its own
+   * example phrase through the same `interpret()` the microphone feeds, so
+   * selecting "next step" and saying "next step" cannot drift apart — there is
+   * one pipeline, not a second implementation of the commands for pointing at.
    */
   function renderCommandList(target) {
     if (!target) return;
@@ -1606,13 +1696,23 @@
       group.forEach(row => {
         const li = document.createElement("li");
         li.className = "cmd-row";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "cmd-run";
         const say = document.createElement("span");
         say.className = "cmd-say";
         say.textContent = `“${row.say}”`;
         const help = document.createElement("span");
         help.className = "cmd-help";
         help.textContent = row.help;
-        li.append(say, help);
+        button.append(say, help);
+        button.addEventListener("click", () => {
+          // Reading the list was the errand; running a command is not, so the
+          // panel gets out of the way exactly as Back would.
+          closeConvo();
+          interpret(row.say);
+        });
+        li.appendChild(button);
         target.appendChild(li);
       });
     });
@@ -1651,12 +1751,13 @@
     if (say) speak(say, !!r.interrupt);
     // An answer is worth reading for a few seconds, then the line is better
     // spent offering the next move — but only if the cook has not moved on.
+    // How long depends on what kind of answer it was; see `answerRestMs`.
     clearTimeout(answerRestHandle);
     answerRestHandle = setTimeout(() => {
       const el = $("voice-text");
       if (el && el.textContent !== status) return;
       restVoice();
-    }, 9000);
+    }, answerRestMs(r.state));
     return say;
   }
 
@@ -1740,6 +1841,16 @@
       if (micIcon) micIcon.textContent = "🔍";
       if (micBtn) micBtn.title = "This screen cannot listen — see what it can do instead";
     }
+    // A third case the two above cannot express. `canListen` is a fact about the
+    // browser — the API is there or it is not — and it stays true on a screen
+    // whose recogniser has been caught never opening. Leaving the button saying
+    // "Voice" there is the lie the cook kept pressing. So it is relabelled to
+    // what it now does: open the list of phrases they can select instead.
+    if (voiceInputDead) {
+      if (micLabel) micLabel.textContent = "Phrases";
+      if (micIcon) micIcon.textContent = "📋";
+      if (micBtn) micBtn.title = "This screen's microphone is not opening — pick a phrase to run instead";
+    }
 
     // Voices can arrive after first paint, so the capability line has to be
     // allowed to correct itself once the real answer is known.
@@ -1756,7 +1867,7 @@
    * is behind it.
    */
   function defaultVoiceStatus() {
-    const canListen = !!(capSummary && capSummary.canListen);
+    const canListen = canOfferListening();
     const spoken = !!(capSummary && capSummary.spokenPrimary);
     if (canListen) {
       // Hands-free is restored across a reload but deliberately does NOT open the
@@ -1774,6 +1885,12 @@
       return spoken
         ? "Press 🎙 and talk — or 💬 to see what you can say"
         : "Press 🎙 and talk — answers stay on screen here";
+    }
+    // The microphone has been tried and did not open. "This screen cannot
+    // listen" was true but useless; naming the reason and pointing at the thing
+    // that does work is the same honesty with somewhere to go.
+    if (voiceInputDead) {
+      return "The microphone is not opening here — press 💬 and pick a phrase";
     }
     if (spoken) return "This screen cannot listen — use the remote's Alexa button";
     return "No voice in or out here — press 💬 to see what you can say";
@@ -2314,24 +2431,88 @@
   }
 
   /**
+   * The microphone has been caught not opening. Give the cook the way in that
+   * does work, once, instead of the same failing wait on every press.
+   *
+   * This is the half the app was missing. The old code answered a dead
+   * microphone with an apology and left the button exactly as it was, so the
+   * only thing a cook could do was press it again and be apologised to again.
+   * Every voice system that survives contact with real hardware has a second
+   * input for this case; here it is the command table, whose rows now run their
+   * own phrase through the same `interpret()` the microphone feeds. Opening the
+   * panel with the list already expanded is that second input, made the default
+   * on a device that has proved it cannot do the first.
+   *
+   * It opens a modal on purpose, and that is a decision worth stating. A dialog
+   * covers the page, so the microphone button underneath it cannot be pressed
+   * again until it is closed — which is why this is a *single* opening rather
+   * than a button that would toggle the list: the toggle could never be reached.
+   * The escape is the panel's own Close, the same one every other dialog here
+   * has, and the press after that retries the microphone rather than reopening
+   * this. So the two failure modes — a modal the cook cannot leave, and a modal
+   * that reopens forever — are both closed off.
+   *
+   * `showList` is the difference between the two ways the app can arrive here. A
+   * press is the cook asking for something and deserves the list; the hands-free
+   * re-arm is the app noticing on its own, and a dialog that appears without
+   * anybody touching anything is a hijack. So the re-arm ends the mode and says
+   * where the list is, and leaves it one press away.
+   */
+  function offerPhrasesInstead(showList) {
+    // Nothing left to re-open, so the mode that re-opens it ends here rather
+    // than spending the cook's time failing twice more before it gives up on its
+    // own — and it says so in the same line, because a mode that stops without
+    // being announced is a mode the cook will keep talking into.
+    const ended = handsFreeEnded("it would only keep re-opening a microphone that is not there.");
+    if (showList) { openConvo(); setConvoHelp(true); }
+    answer({
+      state: "error",
+      status: showList
+        ? "The microphone is not opening — pick a phrase instead"
+        : "The microphone is not opening — hands-free is off",
+      say: "This screen's microphone is not opening, so I cannot listen here. " +
+        (showList
+          ? "I have opened the list of things you can say — choose one to run it. " +
+            "To have me try the microphone again, close this list and press once more."
+          : "Press 💬 for the list of things you can say, or press the microphone to try once more.") +
+        ended,
+    });
+  }
+
+  /**
    * Open the microphone — and be honest about it if it never really opens.
    *
    * The old advice was that a microphone button either works or throws. It does
    * not. A browser will hand back a SpeechRecognition object, accept start(), and
-   * then produce no events at all when it cannot reach a speech service, which is
-   * exactly what chromium does in the browser this app is verified in. The old
+   * then produce no events at all when it cannot reach a speech service — which
+   * is what chromium does in headless mode, and the reason every voice test in
+   * this repo used to pass against a mock while the real thing was dead. The old
    * code wrote "Listening… speak a command" and left it there indefinitely, so
    * the screen went on insisting it was awake while nothing whatsoever happened.
    *
    * Every way this can end now ends in words: a result, a named error, a
    * timeout, or an end with nothing heard. There is no path that leaves the line
    * claiming to listen.
+   *
+   * `options.rearm` marks the one caller that is the app rather than the cook —
+   * the hands-free re-open. It changes one thing: whether a failure may put a
+   * dialog on screen. See `offerPhrasesInstead`.
    */
-  function toggleVoice() {
-    // No in-page microphone on this device: route to the panel that explains
-    // how to talk, instead of a control whose only outcome is a complaint.
-    if (capSummary && !capSummary.canListen) { openSelfCheck(); return; }
-    // Tapping again while it is open is a request to stop.
+  function toggleVoice(options) {
+    // Barge-in. Every assistant a cook has used lets them talk over it; this app
+    // made them wait for the sentence to finish before the microphone would open,
+    // so "no, I meant something else" cost them the whole answer. Pressing the
+    // microphone now means what it means everywhere else: stop talking, I am
+    // talking. Cancelling here also clears the `speaking` flag that a dead
+    // engine leaves stuck on, which the hands-free re-arm waits for.
+    if (!voiceRecognition && window.speechSynthesis && window.speechSynthesis.speaking) {
+      window.speechSynthesis.cancel();
+      cancelHandsFreeRearm();
+    }
+
+    // Tapping again while it is open is a request to stop. This is checked
+    // BEFORE the capability gate on purpose: a cook must always be able to stop
+    // a listen that is running, whatever the app believes about the device.
     if (voiceRecognition) {
       // A deliberate stop is not a failure, so mark the session handled before
       // anything can report it as one.
@@ -2350,7 +2531,36 @@
     }
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { showToast("Voice recognition isn't supported in this browser.", 4000); return; }
+    // No `SpeechRecognition` at all is a fact about the browser and nothing can
+    // be done about it here, so the device check — which the button is already
+    // relabelled to — is where it belongs.
+    if (!SR || (capSummary && !capSummary.canListen)) { openSelfCheck(); return; }
+
+    // The recogniser was measured, not assumed, and it has already been caught
+    // never starting. Re-offering the same failing wait would spend the cook's
+    // time proving it a second time, so the first press after a failure hands
+    // them the list that does work.
+    if (voiceInputDead && !voiceInputRetry) {
+      // The re-arm is the app acting alone: it ends the mode and says what is
+      // wrong, but it does not open a dialog nobody asked for, and it does not
+      // spend the retry — that belongs to the cook's next press.
+      const fromRearm = !!(options && options.rearm);
+      if (fromRearm) {
+        offerPhrasesInstead(false);
+        return;
+      }
+      voiceInputRetry = true;
+      offerPhrasesInstead(true);
+      return;
+    }
+    // They were told and pressed anyway, so they mean it: the microphone gets
+    // one more attempt. Without this, a speech service that was down for a
+    // minute would be gone for the rest of the cook.
+    if (voiceInputDead) {
+      voiceInputDead = false;
+      voiceInputRetry = false;
+      applyCapabilityUI();
+    }
 
     const recognition = new SR();
     voiceRecognition = recognition;
@@ -2374,6 +2584,15 @@
     const onLive = () => {
       if (!voiceSession || voiceSession.live) return;
       voiceSession.live = true;
+      // Proof of life, and it clears the verdict. The dead flag exists because
+      // this device was once caught never starting a recogniser; a recogniser
+      // that has just started is not dead, and one unlucky silence must not
+      // brand the screen for the rest of the cook.
+      if (voiceInputDead) {
+        voiceInputDead = false;
+        voiceInputRetry = false;
+        applyCapabilityUI();
+      }
       armVoiceWatchdog(LISTEN_LIMIT_MS, onTooLong);
     };
     recognition.onstart = onLive;
@@ -2411,6 +2630,17 @@
         return;
       }
       if (voiceSession) voiceSession.handled = true;
+      // Not every error means the same thing. `not-allowed` is the cook's to fix
+      // — the permission prompt — and `no-speech` is just silence, which is a
+      // miss and not a defect. The rest are structural: this screen cannot
+      // recognise speech until something outside the page changes, so they are
+      // remembered and the button stops offering what cannot work. The insistent
+      // second press in `toggleVoice` is what keeps that from being permanent.
+      if (UNUSABLE_RECOGNITION.indexOf(code) !== -1) {
+        voiceInputDead = true;
+        voiceInputRetry = false;
+        applyCapabilityUI();
+      }
       const line = RECOGNITION_ERRORS[code] || `This browser's speech recogniser failed (${code}).`;
       answer({
         state: "error",
@@ -2461,18 +2691,25 @@
       // Same reason as the timeout above: an abandoned recogniser is a live
       // microphone, and a live microphone with a talking app is a feedback loop.
       stopVoiceRecognition();
+      // Keep the measurement. `start()` returning without throwing is not the
+      // same as the microphone opening, and this is the only thing that tells
+      // the two apart — so it is remembered and the button stops offering the
+      // one thing this screen has proved it cannot do. `onLive` clears it.
+      voiceInputDead = true;
+      voiceInputRetry = false;
+      applyCapabilityUI();
       answer({
         state: "error",
         status: "No microphone is coming through",
         say: "This screen is not picking up the microphone — the browser's speech service " +
-          "may be blocked, or there may be no microphone. Use the remote, or press 💬 to see what I can do." +
-          handsFreeMissed(),
+          "may be blocked, or there may be no microphone. Use the remote, or press 💬 and " +
+          "pick a phrase." + handsFreeMissed(),
       });
     }
 
     voiceListening = true;
     setVoiceState("listening", `Listening${isChinese() ? " (中文)" : ""}… say something like “${examplePhrase()}”`);
-    armVoiceWatchdog(LISTEN_GRACE_MS, onDeaf);
+    armVoiceWatchdog(LISTEN_START_MS, onDeaf);
 
     try {
       recognition.start();
@@ -3477,7 +3714,10 @@
   $("btn-convo-help").addEventListener("click", toggleConvoHelp);
   $("btn-servings-minus").addEventListener("click", () => changeServings(-1));
   $("btn-servings-plus").addEventListener("click", () => changeServings(1));
-  $("btn-voice").addEventListener("click", toggleVoice);
+  // Explicitly, rather than passing the handler straight to the listener: the
+  // first argument is read as options, and a click event arriving there would be
+  // a coincidence rather than a contract.
+  $("btn-voice").addEventListener("click", () => toggleVoice());
   // Turning hands-free on is an answer like any other, so it goes through the
   // same funnel: the top bar, the transcript and the voice all say the same
   // thing, and the mouth that just told the app to keep listening is closed
