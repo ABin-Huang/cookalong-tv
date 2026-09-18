@@ -1022,22 +1022,41 @@
     applyCapabilityUI();
   }
   if (window.speechSynthesis) { loadVoices(); window.speechSynthesis.onvoiceschanged = onVoicesChanged; }
-  function pickVoice() {
-    return voices.find(v => v.lang === "en-US" && /female|Samantha|Zira|Google US English/i.test(v.name)) || voices.find(v => v.lang === "en-US") || null;
+  /**
+   * A voice for the language the cook is using.
+   *
+   * This used to be hard-coded to en-US, which meant that in Chinese mode the
+   * recogniser heard Chinese and the speaker read the answer with an English
+   * voice — the one combination that makes correct text sound like a fault.
+   */
+  function pickVoice(lang) {
+    const wanted = String(lang || "en-US").replace("_", "-").toLowerCase();
+    const head = wanted.slice(0, 2);
+    const forLang = voices.filter(v => v.lang && v.lang.replace("_", "-").toLowerCase() === wanted);
+    const pool = forLang.length
+      ? forLang
+      : voices.filter(v => v.lang && v.lang.replace("_", "-").toLowerCase().startsWith(head));
+    if (!pool.length) return null;
+    return pool.find(v => /female|Samantha|Zira|Tingting|Huihui|Yaoyao|Xiaoxiao|Google/i.test(v.name)) || pool[0];
   }
+
   function speak(text, interrupt = false) {
-    if (voiceMuted) return;
-    // A device with the API but no installed voice — which is what a Fire TV
-    // is — swallows every utterance without raising an error. Say so once
-    // instead of failing silently for the entire cook.
-    if (capSummary && !capSummary.spokenPrimary) {
-      if (!silentNoticeShown) {
+    // Whether anything will actually be said out loud. A muted app says nothing;
+    // so does a device with the API and no installed voice, which is what a Fire
+    // TV is. Both are still turns the cook has to get back, so neither may skip
+    // the hands-free re-arm below.
+    const willSpeak = !voiceMuted && !!(capSummary && capSummary.spokenPrimary) && !!window.speechSynthesis;
+
+    if (!willSpeak) {
+      if (!voiceMuted && capSummary && !capSummary.spokenPrimary && !silentNoticeShown) {
         silentNoticeShown = true;
         showToast("🔇 No voice is installed on this device, so steps stay on screen. Device check has the details.", 6000);
       }
+      // Nothing to wait for, and no utterance that will ever fire `onend`.
+      scheduleHandsFreeRearm();
       return;
     }
-    if (!window.speechSynthesis) return;
+
     // Never talk with the microphone open. The recogniser can hear the answer
     // through the speakers, treat it as a new command, and get answered again —
     // an app that argues with itself for the rest of the cook. Closing the
@@ -1046,9 +1065,24 @@
     if (voiceRecognition) stopVoiceRecognition();
     if (interrupt) window.speechSynthesis.cancel();
     const utter = new SpeechSynthesisUtterance(text);
-    utter.lang = "en-US"; utter.rate = 0.98;
-    const v = pickVoice(); if (v) utter.voice = v;
+    // The cook's language, so the answer is read by a voice that can pronounce
+    // it. Hard-coded English read Chinese text aloud as a stream of odd noises.
+    utter.lang = voiceLang;
+    utter.rate = 0.98;
+    const v = pickVoice(voiceLang); if (v) utter.voice = v;
+    // Hands-free hangs off this: the microphone is handed back once the app has
+    // genuinely stopped talking, not when it started.
+    utter.onend = () => scheduleHandsFreeRearm();
+    utter.onerror = () => scheduleHandsFreeRearm();
     window.speechSynthesis.speak(utter);
+    // `onend` is the fast path, never the only path. It is not guaranteed to
+    // arrive: an utterance that gets cancelled goes quiet without it, and so does
+    // the first utterance in a freshly started engine — after which `speaking`
+    // stays true forever. A mode whose liveness rested on that one event would
+    // stop listening and never say why, which is the failure this fallback
+    // exists for. So the re-arm is armed against what the answer costs to read,
+    // and re-checks the flag itself when the timer fires.
+    scheduleHandsFreeRearm(HANDS_FREE_REARM_TRIES, speakBudgetMs(text));
   }
   function setVoiceStatus(text) {
     const el = $("voice-text");
@@ -1084,6 +1118,13 @@
    */
 
   const VOICE = window.CookalongVoiceCommands || null;
+  /**
+   * The conductor. It composes the ranking, the plan and the shopping list into
+   * one job, and the command table teaches its goals — so if it is missing, the
+   * taught list would offer jobs nothing can run. `respond` checks for it
+   * explicitly and says so rather than failing quietly.
+   */
+  const AGENT = window.CookalongAgent || null;
   const VOICE_LOG_KEY = "cookalong.voice-log.v1";
   const VOICE_LOG_MAX = 40;
 
@@ -1190,6 +1231,38 @@
   const LISTEN_GRACE_MS = 3500;
   const LISTEN_LIMIT_MS = 10000;
 
+  /**
+   * Hands-free: the microphone re-opens itself after every answer.
+   *
+   * Voice-first was a claim the app did not quite keep. Every spoken command
+   * still cost a press first, so on the device this is built for — a TV across
+   * the room, with flour on your hands — the app asked you to get up, find the
+   * remote, and come back. Which is the exact thing it exists to remove.
+   *
+   * With this on, the microphone is handed straight back after the app has
+   * finished talking, so a whole cook can be driven without touching anything.
+   *
+   * The care is all in *when* to re-open. Re-opening too early and the
+   * microphone hears the app's own sentence and answers it — the self-feeding
+   * loop `speak()` was hardened against. And re-opening unconditionally turns a
+   * device with no working microphone into a machine that fails, apologises,
+   * re-opens, fails — so misses are counted and hands-free switches itself off
+   * after two in a row, saying so. A mode that cannot work must end, not loop.
+   */
+  const HANDS_FREE_KEY = "cookalong.handsfree.v1";
+  const HANDS_FREE_MAX_MISSES = 2;
+  const HANDS_FREE_REARM_MS = 350;
+  const HANDS_FREE_REARM_TRIES = 60;
+  // How long an answer is allowed to keep the microphone shut. See `speakBudgetMs`.
+  const HANDS_FREE_SPEAK_FLOOR_MS = 1300;
+  const HANDS_FREE_SPEAK_UNIT_MS = 340;
+  const HANDS_FREE_SPEAK_CEIL_MS = 15000;
+
+  let handsFree = false;
+  let handsFreeMisses = 0;          // consecutive listens that ended with nothing
+  let handsFreeRearm = null;        // the pending re-open
+  let pendingJob = null;            // a composed job waiting for yes or no
+
   let voiceState = "idle";
   let voiceLog = [];              // [{ who: "you"|"cookalong", text, at }]
   let voiceUnread = 0;            // turns added since the panel was last opened
@@ -1244,6 +1317,149 @@
     if (!voiceWatchdog) return;
     clearTimeout(voiceWatchdog);
     voiceWatchdog = null;
+  }
+
+  /* -- hands-free ----------------------------------------------------------- */
+
+  function loadHandsFree() {
+    try { handsFree = localStorage.getItem(HANDS_FREE_KEY) === "on"; } catch (e) { handsFree = false; }
+  }
+
+  function saveHandsFree() {
+    try { localStorage.setItem(HANDS_FREE_KEY, handsFree ? "on" : "off"); } catch (e) { /* private mode */ }
+  }
+
+  /**
+   * The screen says which mode it is in.
+   *
+   * Hands-free is a mode the cook cannot see the edge of — the microphone is
+   * open and they are not holding anything, so nothing on screen tells them
+   * whether the app is listening or has quietly stopped. The body carries the
+   * state so the stylesheet can both mark it and get the chrome out of the way,
+   * and the button says the same thing in words.
+   */
+  function applyHandsFreeUI() {
+    document.body.dataset.handsfree = handsFree ? "on" : "off";
+    const btn = $("btn-handsfree");
+    if (!btn) return;
+    btn.textContent = handsFree ? "🙌 Hands-free on" : "🙌 Hands-free";
+    btn.setAttribute("aria-pressed", String(handsFree));
+    btn.classList.toggle("active", handsFree);
+  }
+
+  function cancelHandsFreeRearm() {
+    if (!handsFreeRearm) return;
+    clearTimeout(handsFreeRearm);
+    handsFreeRearm = null;
+  }
+
+  /**
+   * How long an answer costs to read out loud.
+   *
+   * `speechSynthesis.speaking` is the honest signal for "still talking", and it
+   * is the one consulted first — but it is also known to stick true, and on this
+   * app's own verification browser it does exactly that: `onstart` arrives,
+   * `onend` never does, and `speaking` stays true for as long as anyone keeps
+   * asking. Waiting on a flag that never clears is waiting forever, so the wait
+   * is also bounded by what the sentence would take to say. Past that budget the
+   * app stops believing the flag and hands the turn over anyway.
+   *
+   * A word or two read slightly early is a nuisance; a mode that never listens
+   * again is a broken mode. The estimate leans generous for that reason, and a
+   * Chinese answer is counted by character, because it has no spaces to count.
+   */
+  function speakBudgetMs(text) {
+    const body = String(text || "");
+    const cjk = (body.match(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g) || []).length;
+    const words = body.replace(/[\u3040-\u30ff\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/g, " ")
+      .trim().split(/\s+/).filter(Boolean).length;
+    const units = cjk + words;
+    const estimate = HANDS_FREE_SPEAK_FLOOR_MS + units * HANDS_FREE_SPEAK_UNIT_MS;
+    return Math.min(HANDS_FREE_SPEAK_CEIL_MS, estimate);
+  }
+
+  /**
+   * Hand the turn back to the cook.
+   *
+   * Deliberately not driven by a single event. `speechSynthesis` fires `onend`
+   * for an utterance that was cut off, and not at all for one that never
+   * started, so this re-checks reality when the timer fires instead of trusting
+   * whatever called it: if the app is still talking, wait; if the microphone is
+   * somehow already open, do nothing. A device with no installed voice — every
+   * Fire TV — takes the same path and re-opens immediately, because there was
+   * never going to be an utterance to wait for.
+   *
+   * `budgetMs` is the reading time the "still talking" flag is trusted for. It
+   * is spent down as the timer re-arms, so a flag that never clears costs one
+   * bounded wait rather than the rest of the cook.
+   */
+  function scheduleHandsFreeRearm(tries, budgetMs) {
+    if (!handsFree) return;
+    cancelHandsFreeRearm();
+    const left = typeof tries === "number" ? tries : HANDS_FREE_REARM_TRIES;
+    if (left <= 0) return;
+    const budget = typeof budgetMs === "number" ? budgetMs : 0;
+    handsFreeRearm = setTimeout(() => {
+      handsFreeRearm = null;
+      if (!handsFree || voiceRecognition) return;
+      const stillTalking = !!(window.speechSynthesis && window.speechSynthesis.speaking);
+      if (stillTalking && budget > 0) {
+        scheduleHandsFreeRearm(left - 1, budget - HANDS_FREE_REARM_MS);
+        return;
+      }
+      toggleVoice();
+    }, HANDS_FREE_REARM_MS);
+  }
+
+  /**
+   * A listen that ended with nothing in it.
+   *
+   * Returns a sentence for the caller to append to its own answer rather than
+   * answering separately, so one failure still produces one line — and so the
+   * cook is told the mode ended in the same breath as why.
+   */
+  function handsFreeMissed() {
+    if (!handsFree) return "";
+    handsFreeMisses += 1;
+    if (handsFreeMisses < HANDS_FREE_MAX_MISSES) return "";
+    setHandsFree(false);
+    return " I could not hear anything twice in a row, so hands-free is off now — press the microphone when you are ready.";
+  }
+
+  function setHandsFree(on) {
+    handsFree = !!on;
+    if (!handsFree) cancelHandsFreeRearm();
+    saveHandsFree();
+    applyHandsFreeUI();
+  }
+
+  /** The button, and the answer that says what just changed. */
+  function toggleHandsFree() {
+    if (handsFree) {
+      setHandsFree(false);
+      return {
+        status: "Hands-free is off",
+        say: "Hands-free is off. Press the microphone when you want to talk, or ask me to turn it on again.",
+      };
+    }
+    // A mode that re-opens a microphone cannot be turned on where there is no
+    // microphone — it would retry forever, which is exactly the failure the miss
+    // counter exists to stop. Refuse once, and say what to use instead.
+    if (!capSummary || !capSummary.canListen) {
+      return {
+        state: "error",
+        status: "No microphone on this device",
+        say: "This device has no microphone I can open, so I cannot listen hands-free. " +
+          "On a Fire TV, the remote's Alexa button is the voice input — press 💬 to see what I can do.",
+      };
+    }
+    handsFreeMisses = 0;
+    setHandsFree(true);
+    return {
+      status: "Hands-free on — I will keep listening",
+      say: "Hands-free is on. After every answer I will open the microphone again, " +
+        "so you can cook without touching anything. Say “stop listening” to end it.",
+    };
   }
 
   /** Recognition failures, in the words of the cook's problem, not the code's. */
@@ -1543,6 +1759,15 @@
     const canListen = !!(capSummary && capSummary.canListen);
     const spoken = !!(capSummary && capSummary.spokenPrimary);
     if (canListen) {
+      // Hands-free is restored across a reload but deliberately does NOT open the
+      // microphone on its own at boot: a page that grabs the microphone before
+      // the cook has touched anything is a permission prompt out of nowhere. It
+      // says what to do instead — one press, then it never stops listening.
+      if (handsFree) {
+        return isChinese()
+          ? "🙌 免遥控已开 — 按一次 🎙 就开始，之后我会一直听着"
+          : "🙌 Hands-free is on — press 🎙 once to start, and I keep listening after that";
+      }
       // The line names the language the microphone is in, because that is the
       // one setting a cook cannot see the effect of until it is too late.
       if (isChinese()) return "🎙 中文 — 说“下一步”，或按 💬 看能说什么";
@@ -1717,6 +1942,10 @@
     if (voiceSession) voiceSession.handled = true;
     stopVoiceRecognition();
     if (!said) { restVoice(); return; }
+    // It heard something, so hands-free is working. Clearing here rather than on
+    // success means a command the app did not understand still counts as the
+    // mode doing its job — the microphone was fine, the phrase was not.
+    handsFreeMisses = 0;
     logTurn("you", said);
     setVoiceState("thinking", `“${said}” — thinking…`);
     setTimeout(() => respond(said), 180);
@@ -1741,6 +1970,13 @@
       return;
     }
 
+    // A job that asked a question owns the next utterance, so this runs before
+    // the table: "yes" is not in the table, and without this the app would
+    // answer its own question with "I didn't catch that" while the plan it
+    // proposed sat waiting for an answer it had already been given.
+    const settled = resolvePendingJob(said);
+    if (settled) { answer(settled); return; }
+
     const hit = VOICE.findCommand(said, {
       recipes,
       allergens: (engine && engine.COMMON_ALLERGENS) || [],
@@ -1761,6 +1997,19 @@
       return;
     }
 
+    // Anything else ends the question. A cook who says "next step" instead of
+    // answering has moved on, and a later "yes" must not carry out a plan they
+    // walked away from.
+    pendingJob = null;
+
+    // The conductor's jobs carry their own goal in the capture, so a goal added
+    // to AGENT.GOALS is answered here with no second registration in this file —
+    // the same reason the command table generates them instead of listing them.
+    if (hit.capture && hit.capture.goal) {
+      answer(runAgentGoal(hit.capture.goal));
+      return;
+    }
+
     const action = VOICE_ACTIONS[hit.id];
     if (!action) {
       answer({
@@ -1771,6 +2020,85 @@
       return;
     }
     answer(action(hit.capture, said));
+  }
+
+  /* -- the conductor -------------------------------------------------------- *
+   * One request, several engines, one finished job. The agent works out the
+   * whole thing and hands back a plan; nothing happens until the cook says yes,
+   * because the second half of that plan edits a global shopping list.
+   */
+
+  /**
+   * A yes or a no, and nothing else.
+   *
+   * Matched by exact phrase rather than by prefix, because the words a cook
+   * confirms with are also the words commands start with: "stop the timers" and
+   * "no, add the onions" both begin like a refusal, and swallowing either as an
+   * answer to a question the cook had already moved past is worse than making
+   * them say "no" on its own.
+   */
+  const YES_PHRASES = [
+    "yes", "yeah", "yep", "yup", "yes please", "ok", "okay", "sure", "go ahead",
+    "do it", "please do", "go on", "sounds good", "let s do it", "yes do it",
+    "do that", "ok do it", "sure do it", "yes go ahead",
+    "好", "好的", "好啊", "好呀", "行", "可以", "要", "来吧", "开始吧", "就这样", "是的", "对",
+  ];
+  const NO_PHRASES = [
+    "no", "nope", "nah", "no thanks", "not now", "not yet", "later", "cancel",
+    "forget it", "don t", "do not", "leave it", "no thank you",
+    "不", "不用", "不要", "不用了", "算了", "取消", "先不", "不是", "别",
+  ];
+
+  function confirmationOf(said) {
+    const t = VOICE && VOICE.normalize ? VOICE.normalize(said) : String(said || "").toLowerCase().trim();
+    if (YES_PHRASES.includes(t)) return true;
+    if (NO_PHRASES.includes(t)) return false;
+    return null;
+  }
+
+  function resolvePendingJob(said) {
+    if (!pendingJob) return null;
+    const yes = confirmationOf(said);
+    if (yes === null) return null;
+    const job = pendingJob;
+    pendingJob = null;
+    if (!yes) return { status: "Left it alone", say: "Okay — I have not changed anything." };
+    return runJob(job);
+  }
+
+  /** Work out the whole job and ask about it. Nothing has happened yet. */
+  function runAgentGoal(goalId) {
+    if (!AGENT) {
+      return {
+        state: "error",
+        status: "The planner did not load",
+        say: "The planner did not load, so I cannot set that up. Reload the page, or use the buttons.",
+      };
+    }
+    const composition = AGENT.compose(goalId, {
+      have: kitchenHave(),
+      recipes,
+      profile: currentProfile(),
+      servings: effectiveServings(),
+      avoid: [],
+      lang: voiceLang,
+    });
+    pendingJob = composition.ok ? composition : null;
+    return AGENT.propose(composition, voiceLang);
+  }
+
+  /**
+   * Carry the plan out — through the same functions the buttons call, not
+   * through a second copy of them. "Add what's missing" here is literally the
+   * button's own handler, so the list the agent writes is the list the button
+   * writes.
+   */
+  function runJob(composition) {
+    (composition.steps || []).forEach(step => {
+      if (step.do === "open") openRecipe(step.recipeId);
+      else if (step.do === "shop") addMissingFromRecipe();
+    });
+    return AGENT ? AGENT.done(composition, voiceLang) : { status: "Done", say: "Done." };
   }
 
   /** The diet chips, with an answer that says which list is now on screen. */
@@ -1950,6 +2278,22 @@
       setConvoHelp(true);
       return { status: "Here is what you can say", say: "Here is what you can say. The list is on screen now." };
     },
+
+    /* -- hands-free -------------------------------------------------------- *
+     * The mode is a promise about what happens AFTER this answer, so both
+     * actions say what will happen next rather than only what just changed.
+     */
+    "hands-free-on": () => toggleHandsFree(),
+    "hands-free-off": () => {
+      if (!handsFree) {
+        return { status: "Hands-free was already off", say: "Hands-free was not on." };
+      }
+      setHandsFree(false);
+      return {
+        status: "Hands-free is off",
+        say: "Hands-free is off. Press the microphone when you want to talk, or say “hands-free” to turn it back on.",
+      };
+    },
   };
 
   /**
@@ -2071,7 +2415,7 @@
       answer({
         state: "error",
         status: line,
-        say: `${line} Use the remote, or press 💬 to see what I can do.`,
+        say: `${line} Use the remote, or press 💬 to see what I can do.${handsFreeMissed()}`,
       });
     };
 
@@ -2089,7 +2433,7 @@
       answer({
         state: "error",
         status: "I didn't catch that",
-        say: "I did not make out anything. Try again, or press 💬 to see what I can do.",
+        say: "I did not make out anything. Try again, or press 💬 to see what I can do." + handsFreeMissed(),
       });
     };
 
@@ -2106,7 +2450,7 @@
       answer({
         state: "error",
         status: "That took too long — I stopped listening",
-        say: "That took too long, so I stopped listening. Try a shorter command, like “next step”.",
+        say: "That took too long, so I stopped listening. Try a shorter command, like “next step”." + handsFreeMissed(),
       });
     }
 
@@ -2121,7 +2465,8 @@
         state: "error",
         status: "No microphone is coming through",
         say: "This screen is not picking up the microphone — the browser's speech service " +
-          "may be blocked, or there may be no microphone. Use the remote, or press 💬 to see what I can do.",
+          "may be blocked, or there may be no microphone. Use the remote, or press 💬 to see what I can do." +
+          handsFreeMissed(),
       });
     }
 
@@ -2163,6 +2508,16 @@
   const QUICK_INGREDIENTS = ["chicken", "garlic", "rice", "tomato", "broccoli", "eggs", "mushrooms", "tofu", "shrimp", "beef", "bananas", "lemon", "pasta", "carrot", "onion"];
   let pantry = null;
   let lastAsked = null;
+  /**
+   * The kitchen from the last match the cook asked for.
+   *
+   * Not the same thing as the pantry. The pantry is what the app remembers; the
+   * kitchen box is what the cook just told it, and the two can differ — you can
+   * have a full fridge and an empty pantry chip row, or the other way round. A
+   * job composed from the pantry alone would answer "sort out dinner" out of
+   * stale memory and ignore the sentence the cook said ten seconds ago.
+   */
+  let lastKitchenHave = null;
 
   function initPantry() {
     if (!engine || !engine.Pantry) return;
@@ -2316,6 +2671,10 @@
     }
 
     const have = Array.from(new Set([...recognized, ...(pantry ? pantry.all() : [])]));
+    // Remembered for anything that has to reason about the whole kitchen later —
+    // the conductor's jobs read it in preference to the pantry, because this is
+    // the most recent thing the cook said they had.
+    lastKitchenHave = have;
     const profile = currentProfile();
 
     // The exclusion-aware call is the point: it reports not just which recipes
@@ -2435,6 +2794,11 @@
    * the transcript and the voice say the same thing — otherwise the log would
    * only record half of the conversations a cook actually had.
    */
+  /** What the app believes is in the kitchen, for anything that reasons over all of it. */
+  function kitchenHave() {
+    return lastKitchenHave && lastKitchenHave.length ? lastKitchenHave : haveNow();
+  }
+
   function askKitchen(logged) {
     const reply = runKitchenMatch();
     if (reply) answer(reply, { log: logged !== false });
@@ -3114,6 +3478,11 @@
   $("btn-servings-minus").addEventListener("click", () => changeServings(-1));
   $("btn-servings-plus").addEventListener("click", () => changeServings(1));
   $("btn-voice").addEventListener("click", toggleVoice);
+  // Turning hands-free on is an answer like any other, so it goes through the
+  // same funnel: the top bar, the transcript and the voice all say the same
+  // thing, and the mouth that just told the app to keep listening is closed
+  // before the app replies.
+  $("btn-handsfree").addEventListener("click", () => answer(toggleHandsFree()));
   $("btn-mute").addEventListener("click", toggleMute);
   $("btn-selfcheck").addEventListener("click", openSelfCheck);
   $("btn-selfcheck-close").addEventListener("click", closeSelfCheck);
@@ -3213,6 +3582,10 @@
     loadShopping();
     renderShopping();
     restoreMuteState();
+    // Hands-free is a mode the cook set, so it survives a reload like the mute
+    // state does — but it does not open the microphone by itself at boot.
+    loadHandsFree();
+    applyHandsFreeUI();
     ensureRack();
     restoreTimers();
     renderTimers();

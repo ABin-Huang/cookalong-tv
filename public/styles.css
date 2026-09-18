@@ -222,6 +222,25 @@ body {
 body.screen-first .step-text { font-size: 38px; }
 body.screen-first .step-card { min-height: 260px; }
 
+/* ---- Hands-free: the mode where nothing gets pressed ---------------------
+   Voice-first was the claim; having to press a button before you could talk was
+   the caveat. With hands-free on, the microphone comes back by itself after
+   every answer, so the screen's job changes — it stops being the thing you drive
+   and becomes the thing you glance at from across the kitchen. The two pieces of
+   text a cook actually reads at ten feet get bigger, and the bar that carries
+   the state says so. */
+#btn-handsfree.active {
+  /* A mode is not a moment. `.mic.active` pulses to say "the microphone is open
+     right now"; a button that pulsed for the whole cook would be the same kind
+     of lie in a new place — it is on, not happening. */
+  animation: none;
+  background: var(--ok); border-color: var(--ok); color: #0f2018;
+}
+body[data-handsfree="on"] #topbar { border-bottom-color: var(--ok); }
+body[data-handsfree="on"] #voice-text { max-width: 64ch; font-size: 24px; color: var(--text); }
+body[data-handsfree="on"] .step-text { font-size: 40px; }
+body[data-handsfree="on"] .step-card { min-height: 280px; }
+
 /* ---- Allergies ---- */
 .allergens { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 26px; padding: 14px 20px; background: var(--panel); border: 2px solid #2a333d; border-left: 6px solid #e56b6f; border-radius: 14px; }
 .allergens-label { color: #e56b6f; font-size: 20px; font-weight: 700; }

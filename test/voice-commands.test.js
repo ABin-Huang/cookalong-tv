@@ -254,3 +254,59 @@ test("the kitchen question reaches the matcher whether or not the cook phrases i
   const hit = VC.findCommand("I have chicken, garlic and rice", EVERYWHERE);
   assert.deepStrictEqual(hit.capture, {});
 });
+
+test("turning hands-free off is never read as turning it on", () => {
+  // "hands-free off" contains "hands free", so the two entries collide and the
+  // order decides. The wrong order turns a request to stop the microphone
+  // re-opening into a request to keep it going — the app doing the opposite of
+  // what it was told, in the one mode where the cook cannot see it happen.
+  const offAt = VC.COMMANDS.findIndex(c => c.id === "hands-free-off");
+  const onAt = VC.COMMANDS.findIndex(c => c.id === "hands-free-on");
+  assert.ok(offAt !== -1 && onAt !== -1, "both halves of the mode must be in the table");
+  assert.ok(offAt < onAt, "hands-free-off must precede hands-free-on, or 'hands-free off' switches it on");
+
+  assert.strictEqual(matchId("hands-free off"), "hands-free-off");
+  assert.strictEqual(matchId("turn off hands-free"), "hands-free-off");
+  assert.strictEqual(matchId("stop listening"), "hands-free-off");
+  assert.strictEqual(matchId("hands-free"), "hands-free-on");
+  assert.strictEqual(matchId("keep listening"), "hands-free-on");
+  assert.strictEqual(matchId("退出免遥控"), "hands-free-off");
+  assert.strictEqual(matchId("免遥控"), "hands-free-on");
+});
+
+test("asking the app to sort out dinner is not answered with a list of recipes", () => {
+  // The jobs live above the kitchen matcher because "use up what's in my
+  // kitchen" contains "what's in my kitchen". Below it, the kitchen rule claims
+  // the sentence and answers a cook who asked the app to get on with it with a
+  // ranked list — which is what they were trying to avoid asking for.
+  const jobs = VC.COMMANDS.filter(c => c.id.startsWith("agent-")).map(c => c.id);
+  const kitchenAt = VC.COMMANDS.findIndex(c => c.id === "kitchen-match");
+  assert.ok(jobs.length >= 2, "the conductor's jobs have to be taught");
+  jobs.forEach(id => {
+    assert.ok(VC.COMMANDS.findIndex(c => c.id === id) < kitchenAt,
+      `${id} sits below kitchen-match and will be swallowed by it`);
+  });
+
+  assert.strictEqual(matchId("use up what's in my kitchen"), "agent-use-it-up");
+  assert.strictEqual(matchId("sort out dinner"), "agent-dinner");
+  assert.strictEqual(matchId("把冰箱里的东西用掉"), "agent-use-it-up");
+  assert.strictEqual(matchId("帮我定个晚饭"), "agent-dinner");
+
+  // ...and the kitchen question itself still reaches the kitchen matcher.
+  assert.strictEqual(matchId("what's in my kitchen"), "kitchen-match");
+  assert.strictEqual(matchId("冰箱里有鸡蛋"), "kitchen-match");
+});
+
+test("a job carries its goal, so the app does not need a second registration", () => {
+  // The app routes any capture that carries a goal to the conductor, which is
+  // how a job added to AGENT.GOALS works without another line in app.js — and
+  // how one added there cannot end up taught but unhandled.
+  const hit = VC.findCommand("sort out dinner", EVERYWHERE);
+  assert.ok(hit.capture && hit.capture.goal === "dinner",
+    "the capture has to name the goal, or the app cannot run it");
+  VC.COMMANDS.filter(c => c.id.startsWith("agent-")).forEach(command => {
+    const own = VC.findCommand(command.say, EVERYWHERE);
+    assert.ok(own.capture && own.capture.goal,
+      `${command.id} is taught but carries no goal for the app to run`);
+  });
+});

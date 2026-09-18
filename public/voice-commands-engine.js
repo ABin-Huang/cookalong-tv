@@ -41,11 +41,11 @@
  */
 (function (root, factory) {
   if (typeof module === "object" && module.exports) {
-    module.exports = factory();
+    module.exports = factory(require("./agent.js"));
   } else {
-    root.CookalongVoiceCommands = factory();
+    root.CookalongVoiceCommands = factory(root.CookalongAgent);
   }
-})(typeof self !== "undefined" ? self : this, function () {
+})(typeof self !== "undefined" ? self : this, function (agent) {
 
   /**
    * Fold an utterance to something matchable: lower case, punctuation to
@@ -277,6 +277,41 @@
       },
     },
 
+    /* -- hands-free ----------------------------------------------------------
+     * The mode that keeps the microphone coming back, so a whole cook needs no
+     * pressing at all. Off precedes on because "hands-free off" contains
+     * "hands free" — the other order reads a request to stop as a request to
+     * keep going, which is the one direction this must never move in.
+     */
+    {
+      id: "hands-free-off",
+      scope: "always",
+      say: "stop listening",
+      help: "stop the microphone re-opening after every answer",
+      samples: ["hands-free off", "turn off hands-free", "no more listening"],
+      cn: { say: "不用听了", help: "不要再自动打开麦克风", samples: ["退出免遥控", "关掉免遥控"] },
+      match(ctx) {
+        return has(ctx.t,
+          "stop listening", "hands free off", "turn off hands free", "no more listening",
+          "不用听了", "退出免遥控", "关掉免遥控"
+        ) ? {} : null;
+      },
+    },
+    {
+      id: "hands-free-on",
+      scope: "always",
+      say: "hands-free",
+      help: "keep listening after every answer, so nothing needs pressing",
+      samples: ["hands free mode", "keep listening", "stay listening"],
+      cn: { say: "免遥控", help: "每次回答后继续听，全程不用按键", samples: ["一直听着", "持续听"] },
+      match(ctx) {
+        return has(ctx.t,
+          "hands free", "keep listening", "stay listening",
+          "免遥控", "一直听着", "持续听"
+        ) ? {} : null;
+      },
+    },
+
     /* -- the kitchen question ------------------------------------------------ */
     {
       id: "kitchen-match",
@@ -427,6 +462,38 @@
       },
     },
   ];
+
+  /**
+   * The jobs the conductor will take on, taught from the conductor's own list.
+   *
+   * The phrases are in two files because they are two different things: agent.js
+   * owns what a job does, and this table owns the phrase a cook says and the fact
+   * that it is advertised. Generating the entries from `AGENT.GOALS` is what
+   * stops a job from existing without being taught — which is the drift this
+   * whole table was built to prevent, when the cheatsheet offered a phrase that
+   * nothing answered.
+   *
+   * ORDER: these must sit ABOVE `kitchen-match`. "Use up what's in my kitchen"
+   * contains "what's in my kitchen", which the kitchen matcher also claims, so
+   * the wrong order answers a cook who asked the app to get on with dinner with
+   * a list of recipes. A test pins it.
+   */
+  function agentCommands(conductor) {
+    return ((conductor && conductor.GOALS) || []).map(goal => ({
+      id: `agent-${goal.id}`,
+      scope: "always",
+      say: goal.say,
+      help: goal.help,
+      samples: goal.samples || [],
+      cn: goal.cn,
+      match(ctx) {
+        return goal.match(ctx.t) ? { goal: goal.id } : null;
+      },
+    }));
+  }
+
+  const KITCHEN_AT = COMMANDS.findIndex(c => c.id === "kitchen-match");
+  COMMANDS.splice(KITCHEN_AT < 0 ? COMMANDS.length : KITCHEN_AT, 0, ...agentCommands(agent));
 
   /**
    * Read an utterance against the table and hand back the first command that

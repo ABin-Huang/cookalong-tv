@@ -24,6 +24,13 @@
       <button id="btn-voice" class="mic" title="Talk to this screen (browser speech recognition)">
         <span id="mic-icon">🎙</span><span id="mic-label">Voice</span>
       </button>
+      <!-- Hands-free is a mode, not a command, so it needs a control that says
+           whether it is ON — a cook with both hands in a bowl has no other way
+           to tell whether the screen is still listening to them. -->
+      <button id="btn-handsfree" class="mic handsfree" title="Keep the microphone open after every answer, so a whole cook needs no pressing"
+              aria-pressed="false">
+        <span id="handsfree-icon" aria-hidden="true">🙌</span><span id="handsfree-label">Hands-free</span>
+      </button>
       <button id="btn-timer-badge" class="mic timer-badge hidden" title="Timer running — open the cooking screen">
         <span id="timer-badge-icon">⏱</span><span id="timer-badge-text">00:00</span>
       </button>
@@ -242,6 +249,9 @@
   <script src="plan-engine.js"></script>
   <!-- shopping-engine resolves the scaler and the ingredient engine at load time -->
   <script src="shopping-engine.js"></script>
+  <!-- agent-engine composes the ranking, the plan and the list, so it needs all three.
+       voice-commands-engine then teaches the agent's goals, which is why it comes after -->
+  <script src="agent-engine.js"></script>
   <!-- voice-commands-engine is the single table of what can be said; the matcher,
        the cheatsheet and the help panel all read it, so it must exist before app.js -->
   <script src="voice-commands-engine.js"></script>

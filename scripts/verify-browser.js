@@ -689,6 +689,157 @@ const record = (name, pass, detail) => {
   await page.click("#btn-back");
   await page.waitForTimeout(300);
 
+  // --- the conductor: one request, a finished job ---------------------------
+
+  // Said in whatever language the app is in right now, read from the table
+  // rather than hard-coded: the check above deliberately left it in the other
+  // one, and a job that only works in English is exactly what that block exists
+  // to prevent.
+  const langNow = (await readLang()).id;
+  const cnNow = /^zh/i.test(langNow || "");
+  const jobPhrase = await page.evaluate(cn => {
+    const cmd = window.CookalongVoiceCommands.COMMANDS.find(c => c.id === "agent-dinner");
+    return cn ? cmd.cn.say : cmd.say;
+  }, cnNow);
+  const yesPhrase = cnNow ? "好的" : "yes";
+
+  // A kitchen that is guaranteed to be short of something: three ingredients and
+  // no pantry. The job has to be judged on what it did with an incomplete
+  // kitchen, because that is the only kitchen where doing the work is worth
+  // anything — a complete one needs no list and no plan.
+  await page.evaluate(() => localStorage.setItem("cookalong.pantry.v1", "[]"));
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(500);
+  await page.fill("#kitchen-input", "chicken, garlic, rice");
+  await page.click("#btn-kitchen-find");
+  await page.waitForTimeout(400);
+
+  const shopBefore = await page.evaluate(() =>
+    JSON.parse(localStorage.getItem("cookalong.shopping.v1") || "[]").length);
+
+  await say(jobPhrase);
+  const proposed = await page.evaluate(() => {
+    const log = JSON.parse(localStorage.getItem("cookalong.voice-log.v1") || "[]");
+    const last = [...log].reverse().find(t => t.who === "cookalong");
+    return {
+      state: document.getElementById("voice-status").dataset.state,
+      say: last ? last.text : "",
+      onHome: !document.getElementById("view-home").classList.contains("hidden"),
+      onRecipe: !document.getElementById("view-recipe").classList.contains("hidden"),
+    };
+  });
+  record("asking it to sort out dinner answers with a dish and ONE question",
+    proposed.state === "answered" && proposed.onHome && !proposed.onRecipe && /[?？]/.test(proposed.say),
+    `"${proposed.say.slice(0, 110)}"`);
+
+  // Nothing has happened yet: the app asked, and a question that has already been
+  // acted on is not a question. Opening a dish is free; editing the shopping list
+  // is not, and that is what the yes is for.
+  record("and nothing has happened yet — the dish is not open and the list is untouched",
+    proposed.onHome && !proposed.onRecipe,
+    `home=${proposed.onHome} recipe=${proposed.onRecipe}`);
+
+  await say(yesPhrase);
+  const carried = await page.evaluate(() => {
+    const log = JSON.parse(localStorage.getItem("cookalong.voice-log.v1") || "[]");
+    const last = [...log].reverse().find(t => t.who === "cookalong");
+    return {
+      onRecipe: !document.getElementById("view-recipe").classList.contains("hidden"),
+      step: document.getElementById("step-label").textContent,
+      say: last ? last.text : "",
+      shop: JSON.parse(localStorage.getItem("cookalong.shopping.v1") || "[]").length,
+    };
+  });
+  record("a yes carries the whole plan out: the dish is open, on step one",
+    carried.onRecipe && /(^|\D)1(\D|$)/.test(carried.step),
+    `step="${carried.step}" onRecipe=${carried.onRecipe}`);
+  record("...and the shopping it planned is on the list, built by the same engine the button uses",
+    carried.shop > shopBefore, `${shopBefore} -> ${carried.shop} lines on the list`);
+  record("...and it says the clock was NOT started, so nobody waits for a timer that is not running",
+    /have not started|没有帮你启动/.test(carried.say),
+    `"${carried.say.slice(0, 120)}"`);
+
+  await page.click("#btn-back");
+  await page.waitForTimeout(300);
+
+  // --- hands-free: the microphone comes back by itself ----------------------
+
+  // The mode is the difference between "you can talk to it" and "you can cook
+  // without touching anything", so what has to be proved is that no second press
+  // happens — that is the whole feature. The count of starts is the evidence.
+  await page.evaluate(() => {
+    window.__micStarts = 0;
+    window.SpeechRecognition = class {
+      start() {
+        window.__micStarts += 1;
+        const mine = window.__micStarts;
+        setTimeout(() => {
+          if (this.onstart) this.onstart();
+          const results = [[{ transcript: mine === 1 ? "what timers are running" : "banana submarine" }]];
+          results[0].isFinal = true;
+          if (this.onresult) this.onresult({ resultIndex: 0, results });
+          if (this.onend) this.onend();
+        }, 60);
+      }
+      stop() { if (this.onend) this.onend(); }
+    };
+  });
+
+  await page.click("#btn-handsfree");
+  // Wait for the behaviour, not for the clock. The app has to read its own answer
+  // out loud before it hands the microphone back, so how long this takes depends
+  // on the length of the sentence — and the speech engine in a headless browser
+  // is the slowest case, because it never fires `onend` for the first utterance
+  // and the app has to fall back to its own reading-time budget. A fixed wait
+  // would either flake or quietly lie about what it proved.
+  let reopened = true;
+  try {
+    await page.waitForFunction(() => window.__micStarts >= 2, null, { timeout: 25000 });
+  } catch (e) { reopened = false; }
+  const free = await page.evaluate(() => ({
+    on: document.body.dataset.handsfree,
+    pressed: document.getElementById("btn-handsfree").getAttribute("aria-pressed"),
+    starts: window.__micStarts,
+  }));
+  record("hands-free re-opens the microphone by itself, with no second press",
+    reopened && free.starts >= 2 && free.on === "on" && free.pressed === "true",
+    `${free.starts} microphone opens after one press, body data-handsfree=${free.on}`);
+
+  // And the safety half. A device where the microphone never really opens would,
+  // under a mode that re-opens unconditionally, fail, apologise, re-open and fail
+  // again for as long as the app is on — the self-feeding loop in a new place.
+  // The bound on the number of opens is the evidence that it ended: a mode that
+  // loops does not stop at two.
+  await page.evaluate(() => {
+    window.__micStarts = 0;
+    window.SpeechRecognition = class {
+      start() { window.__micStarts += 1; }        // opens, and then says nothing, ever
+      stop() { }
+      abort() { }
+    };
+  });
+  let gaveUpCleanly = true;
+  try {
+    await page.waitForFunction(() => document.body.dataset.handsfree === "off", null, { timeout: 40000 });
+  } catch (e) { gaveUpCleanly = false; }
+  const gaveUp = await page.evaluate(() => {
+    const log = JSON.parse(localStorage.getItem("cookalong.voice-log.v1") || "[]");
+    const last = [...log].reverse().find(t => t.who === "cookalong");
+    return {
+      on: document.body.dataset.handsfree,
+      starts: window.__micStarts,
+      say: last ? last.text : "",
+    };
+  });
+  record("a hands-free mode that cannot hear anything switches itself off instead of looping",
+    gaveUpCleanly && gaveUp.on === "off" && gaveUp.starts >= 1 && gaveUp.starts <= 6 &&
+      /hands-free is off|免遥控/.test(gaveUp.say),
+    `body data-handsfree=${gaveUp.on} after ${gaveUp.starts} silent opens — "${gaveUp.say.slice(0, 90)}"`);
+
+  await restoreRealMic();
+  await page.evaluate(() => document.body.dataset.handsfree = "off");
+  await page.waitForTimeout(200);
+
   // --- the conversation panel ----------------------------------------------
 
   const badge = await page.evaluate(() => ({

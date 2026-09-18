@@ -39,6 +39,7 @@ const ENGINE_SCRIPTS = {
   CookalongServings: "servings-engine.js",
   CookalongPlan: "plan-engine.js",
   CookalongShopping: "shopping-engine.js",
+  CookalongAgent: "agent-engine.js",
   CookalongVoiceCommands: "voice-commands-engine.js",
 };
 
@@ -99,6 +100,58 @@ test("shopping-engine is loaded after both engines it resolves at load time", ()
   assert.ok(order[2].at > order[1].at, "shopping-engine.js must come after servings-engine.js");
 });
 
+test("agent-engine is loaded after all four engines it composes", () => {
+  // The conductor resolves its collaborators as factory arguments, so loading it
+  // early builds it with missing engines. It then cannot rank, cannot plan and
+  // cannot list a purchase — and because it never throws, the symptom is an
+  // agent that politely refuses every job. Same silent-empty shape as the two
+  // ordering traps above, so it gets the same guard.
+  const deps = ["ingredients-engine.js", "plan-engine.js", "shopping-engine.js", "timer-engine.js"];
+  const agentAt = html.indexOf('src="agent-engine.js"');
+  assert.ok(agentAt !== -1, "index.html must load agent-engine.js");
+  deps.forEach(dep => {
+    const at = html.indexOf(`src="${dep}"`);
+    assert.ok(at !== -1, `${dep} must be loaded by index.html`);
+    assert.ok(agentAt > at, `agent-engine.js must come after ${dep}`);
+  });
+
+  // And the command table teaches the agent's goals, so it has to exist first.
+  const voiceAt = html.indexOf('src="voice-commands-engine.js"');
+  assert.ok(voiceAt > agentAt,
+    "voice-commands-engine.js must come after agent-engine.js — it renders the agent's goals as taught commands");
+});
+
+test("the conductor's jobs are taught, and taught above the question they are made of", () => {
+  // "Use up what's in my kitchen" contains "what's in my kitchen", which the
+  // kitchen matcher also claims. Order is the whole fix: get it wrong and a cook
+  // who asked the app to get on with dinner is handed a list of recipes, with
+  // nothing in the output to say why. Precedence is invisible in review, so it
+  // is asserted here and in test/voice-commands.test.js.
+  const VOICE = require("../src/voice-commands.js");
+  const ids = VOICE.COMMANDS.map(c => c.id);
+  const agent = ids.filter(id => id.startsWith("agent-"));
+  assert.ok(agent.length >= 2, "every agent goal must appear in the command table");
+
+  const kitchenAt = ids.indexOf("kitchen-match");
+  agent.forEach(id => {
+    assert.ok(ids.indexOf(id) < kitchenAt,
+      `${id} must sit above kitchen-match, or the kitchen matcher steals its phrases`);
+  });
+
+  // A taught phrase is a promise the table has to keep: it must reach its own
+  // command, in both languages.
+  ["en-US", "zh-CN"].forEach(lang => {
+    const cn = lang.startsWith("zh");
+    agent.forEach(id => {
+      const declared = VOICE.COMMANDS.find(c => c.id === id);
+      const phrase = cn ? declared.cn.say : declared.say;
+      const hit = VOICE.findCommand(phrase, { recipes: require("../src/recipes.js").RECIPES });
+      assert.ok(hit && hit.id === id,
+        `the taught phrase "${phrase}" must reach ${id}, but reached ${hit && hit.id}`);
+    });
+  });
+});
+
 test("the shipped engines are byte-identical to their src/ originals", () => {
   const pairs = [
     ["src/ingredients.js", "public/ingredients-engine.js"],
@@ -108,6 +161,7 @@ test("the shipped engines are byte-identical to their src/ originals", () => {
     ["src/servings.js", "public/servings-engine.js"],
     ["src/plan.js", "public/plan-engine.js"],
     ["src/shopping.js", "public/shopping-engine.js"],
+    ["src/agent.js", "public/agent-engine.js"],
     ["src/voice-commands.js", "public/voice-commands-engine.js"],
   ];
   const normalize = s => s.replace(/\r\n/g, "\n");
