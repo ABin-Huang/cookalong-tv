@@ -149,7 +149,7 @@ drives headless Chromium at 1920×1080, presses the real buttons, and asserts on
 what a person would see: that the step card is still on screen at 720p, that
 focus lands inside the panel so a D-pad can reach it, that the badge counts down,
 that the microphone really does re-open by itself, and that a mode which cannot
-hear anything stops instead of looping. **68 browser checks and 312 unit tests.**
+hear anything stops instead of looping. **68 browser checks and 325 unit tests.**
 
 ### Challenges we ran into
 
@@ -197,7 +197,7 @@ app, throwing on every request would kill it.
 - **A refusal we can point at.** Allergy and diet constraints survive every path,
   including a resumed session and a swap — a dairy-allergic cook is offered
   nutritional yeast, never cheddar.
-- **Real measurements instead of adjectives.** 312 unit tests, 68 browser checks
+- **Real measurements instead of adjectives.** 325 unit tests, 68 browser checks
   at 1920×1080 and 720p, plus a recorded probe of what `speechSynthesis` actually
   does on the device class we target.
 
@@ -258,7 +258,7 @@ better demo).
 | 1:45–2:05 | Press **🙌 Hands-free**. The button turns green. Then **never touch anything again** — say "next step", "next step", "set a timer for 18 minutes". Each answer is spoken, and the mic re-opens on its own. | "Now the part that makes this a kitchen app. Hands-free. The microphone re-opens itself after every answer — watch, I never touch the remote again. And if it really can't hear me twice in a row, it turns itself off and tells me, instead of retrying forever." |
 | 2:05–2:25 | Cut to a **new session**: reopen the app, say **"keep cooking"**. It lands back on step 3 of 7 with the swap still applied. | "Here's the thing nobody else solves. An Alexa session ends every time you stop talking — and cooking is nothing but pauses. Ask it to keep cooking and you're back where you were: same step, same swap, same diet, and it still knows what's in your fridge." |
 | 2:25–2:40 | Switch language to **中文**; the taught command list switches and a Chinese command moves the step. | "It also listens in your language, not a hard-coded one — the command list and the microphone switch together." |
-| 2:40–2:45 | Terminal: `npm test` → **312 pass**, `npm run verify:browser` → **68/68**. | "312 unit tests, 68 checks driven through a real browser at TV resolution. We didn't just build the demo — we built the thing that proves the demo." |
+| 2:40–2:45 | Terminal: `npm test` → **325 pass**, `npm run verify:browser` → **68/68**. | "325 unit tests, 68 checks driven through a real browser at TV resolution. We didn't just build the demo — we built the thing that proves the demo." |
 
 **Filming notes**
 

@@ -356,7 +356,7 @@ the parts a person would actually notice are checked in a real browser, on deman
 
 ```bash
 npm start                 # terminal 1 — serves public/ on :8080
-npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 61 checks
+npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 68 checks
 ```
 
 It presses the real buttons and reads the real DOM: the panel lists and ticks, the
