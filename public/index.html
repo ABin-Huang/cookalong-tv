@@ -48,7 +48,11 @@
       <button id="btn-allergens-clear" class="btn small allergens-clear">Clear</button>
       <span id="allergens-note" class="allergens-note" aria-live="polite"></span>
     </section>
-    <section id="recipe-grid" class="grid" aria-label="Recipe list"></section>
+    <!-- The kitchen question and the single decision it produces lead the home
+         screen; the full catalogue is the fallback underneath it. The answer
+         should never be something you have to scroll past the recipes it was
+         chosen from to read. The diet and allergy chips stay above this section
+         because they scope the decision, not just the grid. -->
     <section id="kitchen" class="kitchen" aria-label="What can I cook">
       <h3 class="kitchen-title">🧺 What's in my kitchen?</h3>
       <p class="kitchen-hint">Tell CookAlong what you have — it will find the best recipes, flag what's missing, and suggest swaps.</p>
@@ -66,6 +70,7 @@
       </div>
       <div id="kitchen-results" class="kitchen-results" aria-live="polite"></div>
     </section>
+    <section id="recipe-grid" class="grid" aria-label="Recipe list"></section>
     <aside id="voice-cheatsheet" class="cheatsheet">
       <h4>🎙 Remote &amp; voice</h4>
       <ul>

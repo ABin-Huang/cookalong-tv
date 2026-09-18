@@ -115,6 +115,27 @@ test("the shipped engines are byte-identical to their src/ originals", () => {
   ));
 });
 
+test("the decision is rendered above the catalogue it was chosen from", () => {
+  // The home screen promises one decision, and a decision is only a decision if
+  // it is on the first screen. #kitchen originally sat below #recipe-grid, which
+  // put the answer about 1200px down a 1080p TV — you had to scroll past ten
+  // recipes to read the single line the app exists to say. Markup order was the
+  // whole fix, so markup order is what gets asserted.
+  //
+  // The chips stay above the kitchen because they scope the decision, not just
+  // the grid: runKitchenMatch() reads the active diet and the allergy profile.
+  // Reading order is scope -> question -> answer -> catalogue.
+  const at = id => html.indexOf(`id="${id}"`);
+  ["filters", "allergens", "kitchen", "recipe-grid"].forEach(id =>
+    assert.ok(at(id) !== -1, `index.html must declare #${id}`));
+  assert.ok(at("filters") < at("kitchen"),
+    "#filters must come before #kitchen — it scopes the decision, so it has to be read first");
+  assert.ok(at("allergens") < at("kitchen"),
+    "#allergens must come before #kitchen — it scopes the decision, so it has to be read first");
+  assert.ok(at("kitchen") < at("recipe-grid"),
+    "#kitchen must come before #recipe-grid, or the decision falls below the fold on a 10-ft screen");
+});
+
 test("the speech guard is present, not just the speech call", () => {
   // The bug this whole capability layer exists to prevent: calling speak() on a
   // device that has the API and no voices. Guarding on the summarised verdict

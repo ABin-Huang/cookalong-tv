@@ -71,8 +71,31 @@ body {
 .match-actions { display: flex; gap: 12px; margin-top: 12px; }
 .match-actions .btn { flex: 1; }
 .match-cook { width: 100%; }
+/* ---- Tonight's decision: one answer first, the rest on request ---- */
+.match-card.is-decided { grid-column: 1 / -1; border-color: var(--accent); border-width: 3px; }
+.match-tonight { margin-bottom: 16px; }
+.tonight-label { display: inline-block; font-size: 15px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: #10240f; background: var(--ok); border-radius: 999px; padding: 5px 16px; }
+.tonight-why { font-size: 19px; color: var(--text); margin-top: 10px; }
+/* Every card states what it would cost to make, so no card can imply it is
+   cheaper than it is and the groups below need no filter to be legible. */
+.match-need { font-size: 15px; font-weight: 700; border-radius: 999px; padding: 4px 12px; margin-right: 12px; vertical-align: middle; }
+.match-need.ready { color: #10240f; background: var(--ok); }
+.match-need.swap { color: #241a02; background: var(--accent-2); }
+.match-need.shopping { color: #ffe9e9; background: #8c3b40; }
+.kitchen-fold { grid-column: 1 / -1; }
+.kitchen-fold-toggle { font-size: 19px; }
+.kitchen-fold-body { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 20px; margin-top: 16px; }
 .kitchen-empty { color: var(--muted); font-size: 20px; grid-column: 1 / -1; }
 .kitchen-hidden { grid-column: 1 / -1; color: #e56b6f; font-size: 19px; padding: 10px 16px; background: #2a1518; border-left: 6px solid #e56b6f; border-radius: 10px; }
+/* Once there is an answer, the aids that asked the question get out of its way.
+   Measured in a 720p Fire TV viewport (1280x720 — the Silk browser on a Stick):
+   the preamble ran to ~705px, so the decision card started at 705 and the whole
+   thing sat below the fold. Dropping the hint and the chips lifts the card ~145px,
+   which puts the ribbon, the dish name and the cost badge on the first screen.
+   The input stays: it is how you change the answer. Typing anything that no
+   longer matches the answer brings both back (see updateComposing in app.js). */
+.kitchen.has-decision:not(.is-editing) .kitchen-hint,
+.kitchen.has-decision:not(.is-editing) .kitchen-chips { display: none; }
 .cheatsheet { margin-top: 34px; background: var(--panel); border: 1px solid #2a333d; border-left: 6px solid var(--accent-2); border-radius: 14px; padding: 20px 28px; max-width: 720px; }
 .cheatsheet h4 { font-size: 22px; margin-bottom: 10px; color: var(--accent-2); }
 .cheatsheet ul { list-style: none; }

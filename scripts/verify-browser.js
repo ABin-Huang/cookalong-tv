@@ -1,7 +1,9 @@
 "use strict";
 
 /**
- * Browser verification for the shopping list — the checks no unit test can make.
+ * Browser verification for the two things that only exist in the browser: the
+ * shopping list, and the single kitchen decision the home screen is built
+ * around.
  *
  * Every other test in this repo runs the engines in plain Node. The web app is
  * not the engines: it is a DOM, a stylesheet, a remote-control focus model and a
@@ -225,6 +227,135 @@ const record = (name, pass, detail) => {
     return SHOP.speak(SHOP.itemsToBuy(window.COOKALONG_RECIPES.find(r => r.id === "hearty-chicken-soup")).items);
   });
   record("the list has a spoken form with units expanded", /grams|milliliters/.test(spoken), spoken);
+
+  // --- the kitchen decision ------------------------------------------------
+  // The home screen's whole promise is one answer, and the answer is only an
+  // answer if it is (a) the dish the engine ranked first and (b) on the first
+  // screen. Neither is checkable without a browser: the unit tests never load
+  // app.js, and no test knows where anything sits on a 1080p panel. The first
+  // version of this feature failed both — #kitchen sat below #recipe-grid, so
+  // the decision rendered ~1200px down the page, and on a 720p Fire TV viewport
+  // the whole card was off-screen.
+  const FULL_KITCHEN = "chicken, beef, rice, pasta, tomato, onion, garlic, carrot, potato";
+  const askKitchen = async value => {
+    await page.fill("#kitchen-input", value);
+    await page.click("#btn-kitchen-find");
+    await page.waitForTimeout(600);
+  };
+
+  await page.evaluate(() => localStorage.removeItem("cookalong.tonight.v1"));
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(400);
+  await askKitchen(FULL_KITCHEN);
+
+  const decision = await page.evaluate(() => {
+    const eng = window.CookalongIngredients;
+    const have = ["chicken", "beef", "rice", "pasta", "tomato", "onion", "garlic", "carrot", "potato"];
+    const s = eng.suggest(eng.matchRecipes(have, window.COOKALONG_RECIPES));
+    const card = document.querySelector("#kitchen-results .match-card.is-decided");
+    const box = el => { const b = el && el.getBoundingClientRect(); return b ? { top: Math.round(b.top), bottom: Math.round(b.bottom) } : null; };
+    const shown = sel => {
+      const el = document.querySelector(sel);
+      return !!el && getComputedStyle(el).display !== "none";
+    };
+    return {
+      enginePick: s ? s.pick.recipe.name : null,
+      engineAlts: s ? s.alternatives.map(a => a.recipe.name) : [],
+      domName: card ? card.querySelector("h4").textContent.trim() : null,
+      card: box(card),
+      head: box(card && card.querySelector(".match-head")),
+      gridTop: Math.round(document.getElementById("recipe-grid").getBoundingClientRect().top),
+      viewport: window.innerHeight,
+      folds: [...document.querySelectorAll("#kitchen-results .kitchen-fold-toggle")].map(t => t.textContent.trim()),
+      hint: shown(".kitchen-hint"), chips: shown("#kitchen-chips"), pantry: shown(".kitchen-pantry"),
+    };
+  });
+
+  record("the banner names the dish the engine ranked first, not a second opinion",
+    decision.domName !== null && decision.domName === decision.enginePick,
+    `dom="${decision.domName}" engine="${decision.enginePick}"`);
+  record("the decision is on the first screen, above the catalogue it came from",
+    !!decision.card && decision.card.top < decision.gridTop && decision.head.bottom <= decision.viewport,
+    `card ${decision.card && decision.card.top}-${decision.card && decision.card.bottom}, headline to ${decision.head && decision.head.bottom}, grid at ${decision.gridTop}, viewport ${decision.viewport}`);
+
+  const alsoFold = decision.folds.find(f => f.startsWith("Also ready right now"));
+  record("the rest of the ranking is folded away rather than competing with the answer",
+    !!alsoFold && alsoFold.includes(`(${decision.engineAlts.length})`),
+    `fold="${alsoFold}" engine alternatives=${decision.engineAlts.length}`);
+  record("the aids that asked the question step aside, but the input and the pantry stay",
+    !decision.hint && !decision.chips && decision.pantry,
+    JSON.stringify({ hint: decision.hint, chips: decision.chips, pantry: decision.pantry }));
+
+  // Changing the kitchen means the cook is composing again, so the aids return.
+  await page.fill("#kitchen-input", FULL_KITCHEN + ", lemon");
+  await page.waitForTimeout(250);
+  const composing = await page.evaluate(() => ({
+    hint: getComputedStyle(document.querySelector(".kitchen-hint")).display !== "none",
+    chips: getComputedStyle(document.getElementById("kitchen-chips")).display !== "none",
+    headBottom: Math.round(document.querySelector("#kitchen-results .match-card.is-decided .match-head").getBoundingClientRect().bottom),
+    viewport: window.innerHeight,
+  }));
+  record("starting to change the kitchen brings the composing aids back",
+    composing.hint && composing.chips, JSON.stringify(composing));
+
+  // Re-asking the same kitchen must not push the answer off the screen again.
+  await askKitchen(FULL_KITCHEN);
+  const reask = await page.evaluate(() => ({
+    hint: getComputedStyle(document.querySelector(".kitchen-hint")).display !== "none",
+    headBottom: Math.round(document.querySelector("#kitchen-results .match-card.is-decided .match-head").getBoundingClientRect().bottom),
+    viewport: window.innerHeight,
+  }));
+  record("re-asking the same kitchen keeps the answer where it was",
+    !reask.hint && reask.headBottom <= reask.viewport,
+    `headline to ${reask.headBottom} of ${reask.viewport}, hint shown=${reask.hint}`);
+
+  // "Another one" is the runner-up, not a re-roll, and the cook's choice sticks.
+  await page.click("#kitchen-results .match-card.is-decided .match-another");
+  await page.waitForTimeout(400);
+  const second = await page.evaluate(() =>
+    document.querySelector("#kitchen-results .match-card.is-decided h4").textContent.trim());
+  record("another one walks down the same ranking instead of re-rolling",
+    decision.engineAlts.length > 0 && second === decision.engineAlts[0],
+    `expected "${decision.engineAlts[0]}", got "${second}"`);
+
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(500);
+  await askKitchen(FULL_KITCHEN);
+  const resticky = await page.evaluate(() =>
+    document.querySelector("#kitchen-results .match-card.is-decided h4").textContent.trim());
+  record("the dish the cook moved past does not come back after a reload",
+    resticky === second, `reload gave "${resticky}", expected "${second}"`);
+
+  // A fully stocked kitchen is the one case allowed to claim nothing needs buying.
+  const stocked = await page.evaluate(() => {
+    const eng = window.CookalongIngredients;
+    const r = window.COOKALONG_RECIPES.find(x => {
+      const s = eng.suggest(eng.matchRecipes(x.ingredients.map(i => i.canonical), window.COOKALONG_RECIPES));
+      return s && s.ready;
+    });
+    return r ? { name: r.name, listed: r.ingredients.map(i => i.name).join(", ") } : null;
+  });
+  await askKitchen(stocked ? stocked.listed : "");
+  const strict = await page.evaluate(() => {
+    const c = document.querySelector("#kitchen-results .match-card.is-decided");
+    return c ? { need: c.querySelector(".match-need").textContent, why: c.querySelector(".tonight-why").textContent } : null;
+  });
+  record("a fully stocked kitchen is told nothing needs buying, and nothing less is",
+    !!strict && /nothing to buy/i.test(strict.need) && /You have everything/i.test(strict.why),
+    JSON.stringify(strict));
+
+  // An empty kitchen must not be handed a decision at all — but it should still
+  // be told what the closest dishes are, rather than being left with a blank.
+  await page.evaluate(() => localStorage.removeItem("cookalong.tonight.v1"));
+  await askKitchen("salt, pepper");
+  const bare = await page.evaluate(() => ({
+    decided: !!document.querySelector("#kitchen-results .match-card.is-decided"),
+    folds: [...document.querySelectorAll("#kitchen-results .kitchen-fold-toggle")].map(t => t.textContent.trim()),
+    note: (document.querySelector("#kitchen-results .kitchen-empty") || {}).textContent || "",
+  }));
+  record("an empty kitchen gets no decision, only the closest dishes",
+    !bare.decided && (bare.folds.length > 0 || bare.note.length > 0),
+    JSON.stringify(bare));
 
   record("no console errors", errors.length === 0, errors.slice(0, 4).join(" | "));
 

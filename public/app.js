@@ -1446,10 +1446,13 @@
   const kitchenInput = $("kitchen-input");
   const kitchenChips = $("kitchen-chips");
   const kitchenResults = $("kitchen-results");
+  const kitchenBox = $("kitchen");
   const pantryChips = $("pantry-chips");
   const PANTRY_KEY = "cookalong.pantry.v1";
+  const TONIGHT_KEY = "cookalong.tonight.v1";
   const QUICK_INGREDIENTS = ["chicken", "garlic", "rice", "tomato", "broccoli", "eggs", "mushrooms", "tofu", "shrimp", "beef", "bananas", "lemon", "pasta", "carrot", "onion"];
   let pantry = null;
+  let lastAsked = null;
 
   function initPantry() {
     if (!engine || !engine.Pantry) return;
@@ -1503,6 +1506,28 @@
     });
   }
 
+  /**
+   * The hint and the quick chips exist to help the cook ask the question. Once
+   * there is an answer they step aside, because they are the tallest part of the
+   * preamble and the answer is what the cook came for: measured in a 720p
+   * Fire TV viewport the preamble alone ran to ~705px, taller than the screen,
+   * so the decision card began below the fold and was invisible without
+   * scrolling. Composing again brings them back, and "composing" is decided by
+   * the input actually differing from the kitchen we last answered — not by
+   * focus, so pressing Enter to re-ask the same kitchen does not push the answer
+   * back off the screen.
+   */
+  function updateComposing() {
+    if (!kitchenBox || !kitchenInput) return;
+    kitchenBox.classList.toggle("is-editing", kitchenInput.value.trim() !== (lastAsked || ""));
+  }
+
+  function setKitchenMode(hasDecision) {
+    if (!kitchenBox) return;
+    kitchenBox.classList.toggle("has-decision", !!hasDecision);
+    updateComposing();
+  }
+
   function renderKitchenChips() {
     if (!engine || !kitchenChips) return;
     kitchenChips.innerHTML = "";
@@ -1520,6 +1545,54 @@
     });
   }
 
+  // Listing options and naming a winner are different promises. A browse list
+  // can afford to be generous; the decision uses the engine's own floor.
+  const KITCHEN_FLOOR = 25;
+  const KITCHEN_LIMIT = 5;
+
+  /**
+   * A decision is remembered against the kitchen that produced it. "Another one"
+   * must still be showing the same second answer after a reload — an answer that
+   * changes under the cook's feet is not an answer — but the memory is worthless
+   * once the ingredients change, so the signature resets it.
+   */
+  function kitchenSignature(have) { return [...have].sort().join("|"); }
+
+  function loadTonight(signature) {
+    try {
+      const saved = JSON.parse(localStorage.getItem(TONIGHT_KEY) || "null");
+      if (saved && saved.signature === signature && Array.isArray(saved.avoided)) return saved.avoided;
+    } catch (e) { /* private mode, or junk in the key */ }
+    return [];
+  }
+
+  function saveTonight(signature, avoided) {
+    try {
+      localStorage.setItem(TONIGHT_KEY, JSON.stringify({ signature, avoided }));
+    } catch (e) { /* private mode */ }
+  }
+
+  /** A labelled group that stays folded until asked for. */
+  function kitchenFold(label, nodes) {
+    const wrap = document.createElement("div");
+    wrap.className = "kitchen-fold";
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "btn small kitchen-fold-toggle";
+    btn.setAttribute("aria-expanded", "false");
+    btn.textContent = label;
+    const body = document.createElement("div");
+    body.className = "kitchen-fold-body hidden";
+    nodes.forEach(n => body.appendChild(n));
+    btn.addEventListener("click", () => {
+      const hidden = body.classList.toggle("hidden");
+      btn.setAttribute("aria-expanded", String(!hidden));
+    });
+    wrap.appendChild(btn);
+    wrap.appendChild(body);
+    return wrap;
+  }
+
   function runKitchenMatch() {
     if (!engine) { showToast("Ingredient engine not loaded.", 3500); return; }
     const { recognized, unknown } = engine.parseIngredientList(kitchenInput.value);
@@ -1528,6 +1601,7 @@
         ? ` — I didn't get: ${esc(unknown.join(", "))}`
         : "";
       kitchenResults.innerHTML = `<p class="kitchen-empty">I couldn't recognise any ingredients. Try things like “chicken, garlic, rice”${got}.</p>`;
+      setKitchenMode(false);
       return;
     }
 
@@ -1538,9 +1612,20 @@
     // fit, but which ones were removed and for what reason. Without it an
     // allergy filter silently shrinks the list with no explanation.
     const { matches: scored, excluded } = engine.matchRecipesWithExclusions(have, recipes, profile);
-    const matches = scored.filter(m => m.score >= 25).slice(0, 5);
+    const browse = scored.filter(m => m.score >= KITCHEN_FLOOR).slice(0, KITCHEN_LIMIT);
     const allergyHidden = excluded.filter(m =>
       (m.excludedReasons || []).some(r => r.startsWith("contains ")));
+
+    // The decision and the list below it read from the same scored array, so the
+    // dish the banner names is by construction a dish the list also contains —
+    // rather than a second opinion computed here and free to drift from it.
+    const signature = kitchenSignature(have);
+    const decision = engine.suggest(scored, { avoid: loadTonight(signature) });
+
+    // Remember the kitchen this answer belongs to before rendering, so the
+    // composing aids can tell "reading the answer" from "changing the question".
+    lastAsked = kitchenInput.value.trim();
+    setKitchenMode(!!decision);
 
     kitchenResults.innerHTML = "";
     if (allergyHidden.length) {
@@ -1551,7 +1636,7 @@
       kitchenResults.appendChild(note);
     }
 
-    if (!matches.length) {
+    if (!browse.length) {
       // Built as a node rather than by concatenating innerHTML, so the banner
       // above survives the "nothing scored high enough" case too.
       const empty = document.createElement("p");
@@ -1560,10 +1645,68 @@
       kitchenResults.appendChild(empty);
       return;
     }
-    matches.forEach(m => kitchenResults.appendChild(kitchenMatchCard(m, profile, have)));
-    speak(`I found ${matches.length} recipes you can make.`);
-    setVoiceStatus(`Found ${matches.length} matches for your kitchen`);
-    showToast(`🧺 ${matches.length} recipe${matches.length > 1 ? "s" : ""} matched`, 3000);
+
+    const cookable = browse.filter(m => (m.missingHard || []).length === 0);
+    const shopping = browse.filter(m => (m.missingHard || []).length > 0);
+    const alsoReady = decision
+      ? decision.alternatives.filter(m => m.recipe.id !== decision.pick.recipe.id)
+      : [];
+
+    const note = document.createElement("p");
+    note.className = "kitchen-empty";
+
+    if (decision) {
+      const card = kitchenMatchCard(decision.pick, profile, have, {
+        decided: true,
+        ready: decision.ready,
+        // "Another one" walks down the same ranking rather than re-rolling, so
+        // the second answer is the runner-up and not a different dish each time.
+        onAnother: () => {
+          const next = loadTonight(signature).concat([decision.pick.recipe.id]);
+          saveTonight(signature, next);
+          runKitchenMatch();
+        },
+      });
+      card.classList.add("is-decided");
+      kitchenResults.appendChild(card);
+      if (alsoReady.length) {
+        kitchenResults.appendChild(kitchenFold(
+          `Also ready right now (${alsoReady.length})`,
+          alsoReady.slice(0, KITCHEN_LIMIT - 1).map(m => kitchenMatchCard(m, profile, have))
+        ));
+      }
+    } else if (cookable.length) {
+      // Cookable, but none of them clears the bar for "tonight it is this".
+      // Saying nothing rather than promoting the least-bad option is the point.
+      note.textContent = "You could cook these, but none of them is a confident pick yet — you are part of the way to each.";
+      kitchenResults.appendChild(note);
+      cookable.slice(0, KITCHEN_LIMIT).forEach(m => kitchenResults.appendChild(kitchenMatchCard(m, profile, have)));
+    } else {
+      note.textContent = `Nothing here can be cooked without a shop yet. With ${recognized.map(engine.displayName).join(", ")}, the closest are:`;
+      kitchenResults.appendChild(note);
+    }
+
+    if (shopping.length) {
+      kitchenResults.appendChild(kitchenFold(
+        `Needs shopping (${shopping.length})`,
+        shopping.map(m => kitchenMatchCard(m, profile, have))
+      ));
+    }
+
+    // The spoken answer leads with the dish, and says the same thing the card
+    // says. "One swap and you are there" on its own invites the cook to hear "no
+    // shopping needed", which is exactly what a swap does not promise; with the
+    // screen off, the spoken line is the only line there is.
+    speak(decision
+      ? `Tonight, cook ${decision.pick.recipe.name}. ` +
+        (decision.ready
+          ? "You have everything it needs."
+          : "Nothing essential is missing — one swap and you are there.")
+      : `I found ${browse.length} recipes you can make.`);
+    setVoiceStatus(decision ? `Tonight: ${decision.pick.recipe.name}` : `Found ${browse.length} matches`);
+    showToast(decision
+      ? `🧺 Tonight: ${decision.pick.recipe.name}`
+      : `🧺 ${browse.length} recipe${browse.length > 1 ? "s" : ""} matched`, 3000);
   }
 
   function saveKitchenInputToPantry() {
@@ -1615,7 +1758,8 @@
     return { onHand, swap, miss, total, onHandPts, swapPts, earned: onHandPts + swapPts };
   }
 
-  function kitchenMatchCard(m, profile, haveSet) {
+  function kitchenMatchCard(m, profile, haveSet, opts) {
+    const o = opts || {};
     const r = m.recipe;
     const card = document.createElement("article");
     card.className = "match-card";
@@ -1630,10 +1774,34 @@
     const why = buildWhy(m);
     const pct = why.total ? Math.round((why.earned / why.total) * 100) : 0;
     const pts = n => (Math.round(n * 10) / 10).toString();
+
+    // Every card says up front what it would cost the cook to make it, so the
+    // groups below are legible without a filter and no card can imply it is
+    // cheaper than it is.
+    const ready = (m.missingHard || []).length === 0 && (m.missingSubstitutable || []).length === 0;
+    const need = ready
+      ? `<span class="match-need ready">nothing to buy</span>`
+      : (m.missingHard || []).length
+        ? `<span class="match-need shopping">${m.missingHard.length} to buy</span>`
+        : `<span class="match-need swap">${m.missingSubstitutable.length} to swap</span>`;
+
+    // The banner claims only what the match actually supports. "Ready" means
+    // nothing is missing at all; a swap-only dish is still a substitution the
+    // cook has to agree to, and it is described as exactly that.
+    const tonight = o.decided
+      ? `<div class="match-tonight">
+          <span class="tonight-label">Tonight, cook this</span>
+          <p class="tonight-why">${esc(o.ready
+            ? "You have everything it needs — nothing to buy."
+            : `Nothing essential is missing. ${m.missingSubstitutable.length} item${m.missingSubstitutable.length === 1 ? "" : "s"} can be swapped for something that fits your needs.`)}</p>
+        </div>`
+      : "";
+
     card.innerHTML = `
+      ${tonight}
       <div class="match-head">
         <h4>${esc(r.name)}</h4>
-        <span class="match-score">${esc(m.score)}%${kcal ? ` · 🔥 ${kcal}` : ""}</span>
+        <span class="match-score">${need}${esc(m.score)}%${kcal ? ` · 🔥 ${kcal}` : ""}</span>
       </div>
       <div class="match-bar"><span style="width:${esc(m.score)}%"></span></div>
       <div class="match-body">
@@ -1654,6 +1822,7 @@
       <div class="match-actions">
         <button class="btn primary match-cook" type="button">Cook it</button>
         <button class="btn match-shop" type="button">🛒 Add what's missing</button>
+        ${o.onAnother ? `<button class="btn match-another" type="button">Another one</button>` : ""}
       </div>`;
 
     const toggle = card.querySelector(".match-why-toggle");
@@ -1666,6 +1835,8 @@
 
     card.querySelector(".match-cook").addEventListener("click", () => openRecipe(r.id, m, haveSet));
     card.querySelector(".match-shop").addEventListener("click", () => addMissingFromMatch(m, r));
+    const another = card.querySelector(".match-another");
+    if (another && o.onAnother) another.addEventListener("click", o.onAnother);
     // The card is focusable in its own right, so a key pressed on one of its
     // buttons bubbles up here and would open the recipe instead of doing what the
     // button says. Only keys on the card itself may mean "start cooking".
@@ -2206,6 +2377,9 @@
     $("btn-pantry-add").addEventListener("click", saveKitchenInputToPantry);
     $("btn-pantry-clear").addEventListener("click", clearPantry);
     kitchenInput.addEventListener("keydown", e => { if (e.key === "Enter") runKitchenMatch(); });
+    // Typing means the cook is changing the question, so the chips and the hint
+    // come back the moment the kitchen stops matching the answer on screen.
+    kitchenInput.addEventListener("input", updateComposing);
   }
 
   /* Fire TV remote: arrows move focus, OK selects, Back returns. */
