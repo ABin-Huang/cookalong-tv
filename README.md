@@ -186,6 +186,66 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   closes the microphone before it says anything — so no future call path can
   reach the same loop.
 
+## What's new in 2.1 — the hands-free / agent layer
+
+- **The microphone comes back by itself** — every voice app until now needed a
+  press per question, which is a design that assumes the cook has a free hand.
+  They do not; that is the entire problem. **🙌 Hands-free** re-opens the
+  microphone after every answer, so a whole dish runs with no button, no remote,
+  no touch. The honest part is what it took: the re-arm wants to know *when the
+  app stopped talking*, and the obvious signal is a lie. A recorded probe of this
+  browser's `speechSynthesis` shows `onstart` firing, `onend` **never** firing,
+  and `speaking` stuck `true` forever — so a mode hung on `onend` would silently
+  stop listening and never say why. `onend` is therefore a fast path, not the only
+  path: the re-arm is also bounded by what the sentence costs to read (≈3 units a
+  second, counted by character for Chinese, because it has no spaces to count) and
+  re-checks the flag itself. Past that bound it stops believing the flag and hands
+  the turn back. A word or two read early is a nuisance; never listening again is
+  a broken app. On a Fire TV, which has no installed voice at all, there was never
+  going to be an utterance to wait for and it re-opens immediately. And a mode
+  that re-opens a microphone unconditionally will, on a device whose microphone
+  never really opens, fail → apologise → re-open → fail for as long as the app is
+  on: two consecutive silent listens switch it off and say so. The browser harness
+  asserts both halves — the re-open with **no second press**, and the shutdown
+  after exactly two silent opens.
+- **One request, a finished job** (`src/agent.js`) — the app could already rank
+  recipes, plan a cook and build a shopping list; what it could not do was any of
+  that without the cook driving. Say **"sort out dinner"** and a conductor
+  composes all three engines in a single turn: here is the dish, here is what to
+  buy, here is that the longest wait is 18 minutes on step 6, and here is the one
+  question it needs answered. The load-bearing part is that `compose()` **has no
+  side effects at all** — it returns a plan, and the app only executes it after
+  the cook says yes. Opening a recipe is free (Back undoes it); editing the global
+  shopping list is not, so the agent proposes and waits. That is the difference
+  between an agent you can put in a kitchen and one you have to supervise.
+- **"Use up my kitchen" is a different question from "sort out dinner"** — they
+  look like the same request and they are not. "Sort out dinner" wants the best
+  decision; "use up what's in my kitchen" wants a dish that needs **zero
+  shopping**, which is a different objective and often has no answer. When nothing
+  clears that bar the agent says so and names the dish that is *one swap away* —
+  it does not quietly promote it to "ready" and send you to the shop you just
+  asked to avoid. Two jobs, two refusals, and a test asserting the two refusal
+  wordings are never conflated, because the failure mode is an app that sounds
+  helpful while answering the wrong question.
+- **It remembers where you were** (`skill/persistence.js`) — an Alexa session
+  ends the moment the conversation pauses, and cooking is nothing but pauses.
+  Check the oven, come back, say **"keep cooking"**, and you are on step 3 of 7
+  with your swaps still applied. Six facts cross the gap and nothing else: the
+  diet, the allergies, what is in the kitchen, and the dish/step/swaps you were
+  on. The exchange tail — `matchIds`, `awaitingCook` — deliberately does not, or
+  "cook it" tomorrow would start a dish nobody just discussed. Two design
+  decisions carry the weight: an empty session **writes nothing**, so a cook who
+  opens the skill and says nothing cannot erase the profile the last session
+  saved; and every persistence failure is logged and swallowed, because losing
+  memory degrades the skill while throwing on every request would kill it.
+  Opt-in via `DYNAMODB_TABLE`; without it the skill is session-only and unchanged.
+- **A command table that cannot advertise a phrase it cannot answer** — voice
+  commands are data, not `if` statements. One table generates the on-screen
+  cheatsheet, the 💬 help panel and the utterance matcher, so the three cannot
+  drift. The conductor's jobs are generated from its own goal list and injected
+  **above** the kitchen matcher, because *"use up what's in my kitchen"* contains
+  *"what's in my kitchen"* — ordering is load-bearing, so a test asserts it.
+
 ## What's inside
 
 | Path | What it is |
@@ -201,8 +261,11 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
 | `src/plan.js` | Cook plan: which steps of a recipe name a time, how long the longest wait is, and which step to start first (UMD) |
 | `src/voice-commands.js` | The one table of what can be said to this screen: the phrase the app teaches, the rule that recognises it, and where it works (UMD) |
 | `src/shopping.js` | Shopping list: what a recipe still needs bought, scaled to the yield, minus the staples and the pantry, with the amounts added up only when the units match (UMD) |
-| `scripts/` | `build-web.js` syncs `src/` into `public/`; `serve.js` is the dev server |
-| `test/` | Unit tests for the recipe, ingredient, timer, capability, progress, servings, plan & shopping engines, plus two contract tests |
+| `src/agent.js` | The conductor: composes the match, the plan and the shopping list into one job and one question, with no side effects until the cook says yes (UMD) |
+| `skill/persistence.js` | What crosses the gap between two sessions, and what deliberately does not |
+| `scripts/` | `build-web.js` syncs `src/` into `public/`; `serve.js` is the dev server; `verify-browser.js` drives a real Chromium at TV resolution |
+| `test/` | Unit tests for the recipe, ingredient, timer, capability, progress, servings, plan, shopping, agent & voice-command engines, plus three contract tests |
+| `docs/DEVPOST_SUBMISSION.md` | Track declaration, the submission story, and the demo video script |
 
 ## Quick start (web app)
 
@@ -418,12 +481,24 @@ unnoticed.
    still there too: it outlives the recipe it was built from.
 10. Open **Device check** → the probes for this device, and **Copy report** for
     a bug report anyone can paste.
-11. Drive the whole thing with the remote: arrows move, OK selects, Back
+11. Say **"sort out dinner"** — the agent answers with a dish, the shopping it
+    would add, and the longest wait, and *then* asks one question. Say **"yes"**
+    and the recipe opens on step 1 with the list already filled in — it waited,
+    because opening a recipe is free and editing your shopping list is not. Now
+    say **"use up what's in my kitchen"** and watch it answer the *other*
+    question: nothing here needs zero shopping, and here is the one dish that is
+    a single swap away.
+12. Press **🙌 Hands-free** and then put the remote down and leave it down. Say
+    "next step", "next step", "set a timer for 18 minutes" — the microphone
+    re-opens by itself after every answer.
+13. Drive the whole thing with the remote: arrows move, OK selects, Back
     returns. Turn the network off and reload — it still opens.
-12. Close on "hands never touched the screen".
+14. Close on "hands never touched the screen".
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design and
-[docs/DEV_SETUP.md](docs/DEV_SETUP.md) for the development environment.
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) for the system design,
+[docs/DEV_SETUP.md](docs/DEV_SETUP.md) for the development environment, and
+[docs/DEVPOST_SUBMISSION.md](docs/DEVPOST_SUBMISSION.md) for the submission
+story and the 2:45 demo video shot list.
 
 ## License
 
