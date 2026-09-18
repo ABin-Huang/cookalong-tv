@@ -81,6 +81,138 @@ test("matchRecipes is sorted by score then hard-missing count", () => {
   }
 });
 
+/* ---------- deciding, and cooking without shopping ---------- */
+
+const risotto = RECIPES.find(r => r.id === "mushroom-risotto");
+const risottoFullyStocked = () =>
+  risotto.ingredients.filter(i => !i.pantry).map(i => i.canonical);
+
+test("isReadyNow is the strict reading: a swap does not count as ready", () => {
+  const [full] = I.matchRecipes(risottoFullyStocked(), [risotto]);
+  assert.strictEqual(I.isReadyNow(full), true, "everything owned is ready");
+
+  // The same dish with the cheese missing: cookable, but only by making a
+  // substitution decision, so it is not something we may call ready.
+  const [swappable] = I.matchRecipes(["mushroom", "rice", "onion", "garlic"], [risotto]);
+  assert.ok(swappable.missingSubstitutable.includes("cheese"), "precondition: cheese is swap-able here");
+  assert.deepStrictEqual(swappable.missingHard, []);
+  assert.strictEqual(I.isReadyNow(swappable), false, "a swap is still a decision to make");
+
+  // And a hard miss is a trip to the shop.
+  const [short] = I.matchRecipes(["rice"], [risotto]);
+  assert.ok(short.missingHard.length > 0, "precondition: something is genuinely missing");
+  assert.strictEqual(I.isReadyNow(short), false);
+});
+
+test("isReadyNow survives a malformed match instead of throwing", () => {
+  assert.strictEqual(I.isReadyNow(null), false);
+  assert.strictEqual(I.isReadyNow(undefined), false);
+  // Fail closed: absent bookkeeping is not evidence that nothing is missing.
+  assert.strictEqual(I.isReadyNow({}), false);
+  assert.strictEqual(I.isReadyNow({ missingHard: [] }), false);
+});
+
+test("readyNow is a subset in the parent order, never a re-ranking", () => {
+  const matches = I.matchRecipes(risottoFullyStocked(), RECIPES);
+  const ready = I.readyNow(matches);
+  assert.ok(ready.length >= 1);
+  ready.forEach(m => assert.strictEqual(I.isReadyNow(m), true));
+  // Order must be inherited, not recomputed: the same dish has to come first
+  // in both lists, or the "one answer" and the browse list disagree.
+  const firstId = ready[0].recipe.id;
+  assert.strictEqual(matches.find(m => I.isReadyNow(m)).recipe.id, firstId);
+  assert.deepStrictEqual(I.readyNow(null), []);
+  assert.deepStrictEqual(I.readyNow([]), []);
+});
+
+test("suggest returns the head of the cookable ranking everyone else sees", () => {
+  const matches = I.matchRecipes(["mushroom", "rice", "onion", "garlic"], RECIPES);
+  const s = I.suggest(matches);
+  assert.strictEqual(s.pick, matches[0], "the decision must be the same object the list shows first");
+  assert.strictEqual(s.pick.recipe.id, "mushroom-risotto");
+  assert.strictEqual(s.ready, false, "the risotto still wants cheese swapped in");
+  // Everything it offers is cookable, which is what makes the banner a promise
+  // the cook can act on rather than a suggestion to go shopping.
+  [s.pick, ...s.alternatives].forEach(m => assert.deepStrictEqual(m.missingHard, []));
+});
+
+test("suggest declines rather than announcing a weak decision", () => {
+  // An empty kitchen must not produce a decision. It nearly did: the best
+  // scoring dish there is lemon garlic shrimp at 41%, because a recipe padded
+  // with pantry staples can clear any floor while being uncookable. The floor
+  // is not what stops it — the hard-miss rule is.
+  const empty = I.matchRecipes([], RECIPES);
+  assert.ok(empty[0].score > I.SUGGEST_FLOOR, "precondition: a floor alone would have passed this");
+  assert.ok(empty[0].missingHard.length > 0, "precondition: and it is missing essentials");
+  assert.strictEqual(I.suggest(empty), null);
+
+  assert.strictEqual(I.suggest([]), null);
+  assert.strictEqual(I.suggest(null), null);
+
+  const matches = I.matchRecipes(["mushroom", "rice", "onion", "garlic"], RECIPES);
+  assert.strictEqual(I.suggest(matches, { floor: 101 }), null, "nothing clears an impossible floor");
+  const loose = I.suggest(matches, { floor: 1 });
+  assert.ok(loose, "a loose floor still finds the same head");
+  assert.strictEqual(loose.pick, matches[0]);
+});
+
+test("'show me another' walks down the order instead of re-rolling", () => {
+  // A kitchen with three cookable dinners in it, so there is genuinely
+  // something to walk to.
+  const have = ["chicken", "beef", "rice", "pasta", "tomato", "onion", "garlic", "carrot", "potato"];
+  const matches = I.matchRecipes(have, RECIPES);
+
+  const first = I.suggest(matches);
+  assert.strictEqual(first.pick.recipe.id, "garlic-chicken-rice");
+  assert.deepStrictEqual(first.alternatives.map(m => m.recipe.id), ["tomato-basil-pasta", "hearty-chicken-soup"]);
+
+  const second = I.suggest(matches, { avoid: [first.pick.recipe.id] });
+  assert.ok(second, "there is a second answer");
+  assert.strictEqual(second.pick.recipe.id, "tomato-basil-pasta", "the runner-up, not a random dish");
+
+  // Deterministic: asking twice must not produce two different dinners.
+  const again = I.suggest(matches, { avoid: [first.pick.recipe.id] });
+  assert.strictEqual(again.pick.recipe.id, second.pick.recipe.id);
+
+  // And walking past the end says so rather than wrapping back to the start.
+  const everyId = matches.map(m => m.recipe.id);
+  assert.strictEqual(I.suggest(matches, { avoid: everyId }), null);
+});
+
+test("every decision is cookable and nothing offered needs shopping", () => {
+  // Sweep the corpus so the banner can never describe a dish the cook would
+  // have to go out and buy first.
+  const kitchens = [
+    [],
+    ["rice"],
+    ["mushroom", "rice", "onion", "garlic"],
+    risottoFullyStocked(),
+    ["chicken", "rice", "garlic", "onion", "carrot", "potato"],
+    ["chicken", "beef", "rice", "pasta", "tomato", "onion", "garlic", "carrot", "potato"],
+    RECIPES.flatMap(r => r.ingredients.filter(i => !i.pantry).map(i => i.canonical)),
+  ];
+  let decisions = 0;
+  kitchens.forEach(have => {
+    const matches = I.matchRecipes(have, RECIPES);
+    const s = I.suggest(matches);
+    if (!s) return;
+    decisions++;
+    assert.ok(s.pick.score >= I.SUGGEST_FLOOR, "a decision always clears the floor");
+    assert.deepStrictEqual(s.pick.missingHard, [], "a decision is never missing something essential");
+    assert.strictEqual(s.ready, I.isReadyNow(s.pick), "ready mirrors the pick it describes");
+    s.alternatives.forEach(m => {
+      assert.deepStrictEqual(m.missingHard, [], "alternatives are cookable too, or 换一个 would mislead");
+      assert.ok(m.score >= I.SUGGEST_FLOOR);
+    });
+    // A fully stocked kitchen is the one case where the banner may claim the
+    // cook needs to buy nothing at all.
+    if (have.length === RECIPES.flatMap(r => r.ingredients.filter(i => !i.pantry).map(i => i.canonical)).length) {
+      assert.strictEqual(s.ready, true);
+    }
+  });
+  assert.ok(decisions >= 4, `expected several kitchens to yield a decision, got ${decisions}`);
+});
+
 /* ---------- substitutions ---------- */
 
 test("findSubstitute respects the recipe's own diet (vegetarian risotto never swaps to meat stock)", () => {

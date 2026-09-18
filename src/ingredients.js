@@ -426,6 +426,18 @@
 
   const ROLE_WEIGHT = { main: 3, secondary: 1, seasoning: 0.5 };
 
+  /**
+   * How good the best option has to be before any surface is allowed to present
+   * it as a decision rather than as one option among several.
+   *
+   * This number lives here, in the engine, because the web app and the skill
+   * each used to carry their own (25 and 40) — which meant the two surfaces
+   * could disagree about whether there was an answer at all. Listing options
+   * and declaring a winner are different promises: a browse list can afford to
+   * be generous, a decision cannot.
+   */
+  const SUGGEST_FLOOR = 40;
+
   function ingredientWeight(ing) {
     return ROLE_WEIGHT[ing.role] || 1;
   }
@@ -514,6 +526,72 @@
   }
 
   /* ------------------------------------------------------------------ *
+   * 3b. Deciding, and cooking without shopping
+   * ------------------------------------------------------------------ */
+
+  /**
+   * Nothing to buy at all: no hard miss, and nothing that needs a swap either.
+   *
+   * A swap is still a decision the cook has to make, and a hard miss is a trip
+   * to the shop, so neither counts as "ready". This is deliberately the
+   * strictest reading of the two — it is the one claim a cook can act on
+   * without checking anything.
+   */
+  function isReadyNow(m) {
+    // Fail closed. A match missing its own bookkeeping is not evidence that
+    // nothing is missing — and "you have everything" is the one claim that must
+    // never be made on absent data.
+    if (!m || !Array.isArray(m.missingHard) || !Array.isArray(m.missingSubstitutable)) return false;
+    return m.missingHard.length === 0 && m.missingSubstitutable.length === 0;
+  }
+
+  /** Every recipe that needs nothing bought, in the order everything else uses. */
+  function readyNow(matches) {
+    return (matches || []).filter(isReadyNow);
+  }
+
+  /**
+   * Ask for a decision instead of a list.
+   *
+   * This returns the head of the very ranking matchRecipes already produced,
+   * never a second opinion about what fits. Web and Alexa have to be able to
+   * name the same dish, and the only way to guarantee that is for both to read
+   * the same sorted array rather than each applying its own idea of "best" —
+   * which is exactly how the two floors drifted apart in the first place.
+   *
+   * `avoid` is how "show me another" walks down that same order. It filters
+   * rather than re-rolls, so the second answer is the runner-up rather than a
+   * random dish: a recommendation that changes every time you ask is not a
+   * recommendation.
+   *
+   * Returns null when nothing on hand is cookable and good enough. A score
+   * floor alone is not enough protection: a dish padded with pantry staples can
+   * clear 40% while being uncookable, and an empty kitchen used to produce a
+   * confident "lemon garlic shrimp" needing three separate trips' worth of
+   * shopping. A decision has to be something the cook can act on with what is
+   * already in the kitchen — if something essential is missing, that is a plan,
+   * not tonight's dinner.
+   *
+   * The search runs over the cookable subset, so "show me another" lands on the
+   * next dish that can actually be cooked rather than dead-ending on one that
+   * cannot.
+   */
+  function suggest(matches, options) {
+    const opts = options || {};
+    const avoid = new Set(opts.avoid || []);
+    const floor = typeof opts.floor === "number" ? opts.floor : SUGGEST_FLOOR;
+    const ranked = (matches || []).filter(m => m && m.recipe && !avoid.has(m.recipe.id));
+    const cookable = ranked.filter(m => (m.missingHard || []).length === 0 && m.score >= floor);
+    const pick = cookable[0];
+    if (!pick) return null;
+    return {
+      pick,
+      alternatives: cookable.slice(1),
+      ready: isReadyNow(pick)
+    };
+  }
+
+  /* ------------------------------------------------------------------ *
    * 4. Pantry memory ("mark the chicken as used")
    * ------------------------------------------------------------------ */
 
@@ -569,6 +647,10 @@
     matchRecipes,
     matchRecipesWithExclusions,
     topMatches,
+    SUGGEST_FLOOR,
+    isReadyNow,
+    readyNow,
+    suggest,
     ingredientWeight,
     Pantry
   };
