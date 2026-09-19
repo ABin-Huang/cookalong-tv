@@ -12,19 +12,22 @@
  * component whose whole problem is that the callbacks never arrive.
  *
  * So this harness drives the REAL app in a REAL browser and asserts on what a
- * person would see. Three stages, in increasing order of how much of the
+ * person would see. Four stages, in increasing order of how much of the
  * platform they trust:
  *
- *   A. what this browser's recogniser actually does  — reported, never asserted
- *   B. a recogniser that accepts start() and emits nothing — the failure the cook
- *      hit, injected deliberately so it is deterministic everywhere
- *   C. a live recogniser, driven through the real app — asserted where the
- *      platform can do it, reported as skipped where it cannot
+ *   A.  what this browser's recogniser actually does  — reported, never asserted
+ *   B.  a recogniser that accepts start() and emits nothing — the failure the cook
+ *       hit, injected deliberately so it is deterministic everywhere
+ *   B2. a recogniser that opens and reports sound, and whose service then returns
+ *       no words — the other failure the cook hit, in both shapes this machine
+ *       was measured producing (an empty result, and no result at all)
+ *   C.  a live recogniser, driven through the real app — asserted where the
+ *       platform can do it, reported as skipped where it cannot
  *
- * Stage B is the important one, and it is a fault injection rather than a mock:
- * the app code under test is entirely real, and so is the DOM, the timers and
- * the event loop. Only the one component that is broken on the target device is
- * replaced, with the exact behaviour that broke it.
+ * Stages B and B2 are the important ones, and both are fault injections rather
+ * than mocks: the app code under test is entirely real, and so is the DOM, the
+ * timers and the event loop. Only the one component that is broken on the target
+ * device is replaced, with the exact behaviour that broke it.
  *
  * A note on what is NOT tested here. Stage C opens the microphone and verifies
  * the app stays listening, but it does not verify transcription: feeding a
@@ -286,6 +289,159 @@ async function deadRecogniserStage(browser) {
   await context.close();
 }
 
+/* -- stage B2: a recogniser that opens, reports sound, and returns no words --- */
+
+/**
+ * The failure the cook described, injected from what this machine actually does.
+ *
+ * Two shapes were measured, both with the microphone open and real audio playing
+ * into it:
+ *
+ *   edge    start, audiostart, soundstart, speechstart, speechend, result — and
+ *           the result is empty. The service answered, with nothing.
+ *   chrome  start, audiostart, soundstart, speechstart, speechend — and then no
+ *           result of any kind at all. The service never answered.
+ *
+ * Both are the same fact from the cook's side, and both used to be reported as
+ * "try again, a little closer to the microphone" — advice about the one part of
+ * the loop that was working. What replaces it is a statement of what was seen,
+ * and a verdict about the part that was not.
+ *
+ * `reportEmpty` picks the shape. Neither is a stub with callbacks wired to
+ * succeed: they are the failing component, replaced by its own failure.
+ */
+const WORDLESS_BUT_OPEN = (reportEmpty) => {
+  class WordlessRecognition {
+    constructor() {
+      this.lang = "en-US";
+      this.interimResults = true;
+      this.continuous = false;
+      this.maxAlternatives = 1;
+    }
+    start() {
+      // Counted, because "the microphone opened again" is a question about this
+      // call and not about the state a moment later — this recogniser fails
+      // within a tenth of a second, so any assertion that samples the screen
+      // afterwards is racing the fault it just injected.
+      window.__opens = (window.__opens || 0) + 1;
+      const fire = (k, e) => { if (typeof this[k] === "function") this[k](e || {}); };
+      setTimeout(() => {
+        fire("onstart");
+        fire("onaudiostart");
+        fire("onsoundstart");
+        fire("onspeechstart");
+        if (!reportEmpty) return;              // chrome: opened, heard, said nothing
+        setTimeout(() => {
+          fire("onspeechend");
+          // A result with no words in it: the empty transcript edge returns.
+          const results = [[{ transcript: "" }]];
+          results[0].isFinal = true;
+          fire("onresult", { resultIndex: 0, results });
+          fire("onend");
+        }, 120);
+      }, 40);
+    }
+    stop() { /* the service decides when this is over */ }
+    abort() { /* nothing to abort */ }
+  }
+  window.SpeechRecognition = WordlessRecognition;
+  window.webkitSpeechRecognition = WordlessRecognition;
+};
+
+async function wordlessStage(browser) {
+  const context = await browser.newContext({ locale: "en-US", viewport: { width: 1920, height: 1080 } });
+  await context.grantPermissions(["microphone"], { origin: ORIGIN });
+  const page = await context.newPage();
+
+  const press = async (timeout = 6000) => {
+    await page.click("#btn-voice");
+    await page.waitForFunction(
+      () => document.getElementById("voice-status").dataset.state === "error",
+      null, { timeout });
+    return page.evaluate(() => {
+      const log = JSON.parse(localStorage.getItem("cookalong.voice-log.v1") || "[]");
+      const last = [...log].reverse().find(t => t.who === "cookalong");
+      return {
+        state: document.getElementById("voice-status").dataset.state,
+        text: (document.getElementById("voice-text").textContent || "").trim(),
+        mic: (document.getElementById("mic-label").textContent || "").trim(),
+        title: document.getElementById("btn-voice").title,
+        say: last ? last.text : "",
+        panel: !document.getElementById("conversation-panel").classList.contains("hidden"),
+        rows: document.querySelectorAll("#convo-help-list .cmd-run").length,
+        opens: window.__opens || 0,
+      };
+    });
+  };
+
+  // --- shape one: the service answered, with nothing ------------------------
+  await page.addInitScript(WORDLESS_BUT_OPEN, true);
+  await page.goto(TARGET, { waitUntil: "load" });
+  await page.evaluate(() => {
+    localStorage.clear();
+    // A language the cook chose, so the press below is about the microphone and
+    // not about a guess being tested first.
+    localStorage.setItem("cookalong.voice-lang.v1", "en-US");
+    localStorage.setItem("cookalong.voice-lang-chosen.v1", "1");
+  });
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(400);
+
+  const one = await press();
+  record("a service that answers with nothing is not reported as the cook saying nothing",
+    /no words came back/i.test(one.text) && !/closer to the microphone/i.test(one.text),
+    `"${one.text}"`);
+  record("...and the explanation names the speech service, which is the part that failed",
+    /speech service/i.test(one.say) && !/closer/i.test(one.say),
+    `"${one.say.slice(0, 120)}"`);
+  record("...and one listen like that does not change what the button does",
+    one.mic === "Voice", `mic="${one.mic}"`);
+
+  const two = await press();
+  record("two in a row and the microphone stops being offered, in the right words",
+    two.mic === "Phrases" && /speech service/i.test(two.title) &&
+      !/microphone is not opening/i.test(two.say),
+    `mic="${two.mic}" title="${two.title}"`);
+  record("...and the press that reached the verdict is the press that opens the list",
+    two.panel && two.rows > 5, `panel=${two.panel}, ${two.rows} selectable rows`);
+
+  // The escape. The verdict is a measurement, not a sentence: the app has to
+  // still be able to be wrong about it, or one bad minute costs the cook the
+  // feature for the rest of the cook. Counted from the recogniser's own
+  // `start()`, because this fault fails again within a tenth of a second and a
+  // state read afterwards would be reading the second failure, not the retry.
+  await page.click("#btn-convo-close");
+  await page.waitForTimeout(200);
+  await page.click("#btn-voice");
+  await page.waitForTimeout(600);
+  const retried = await page.evaluate(() => ({
+    opens: window.__opens || 0,
+    mic: document.getElementById("mic-label").textContent.trim(),
+  }));
+  record("and it is not permanent — the press after it opens the microphone again",
+    retried.opens > two.opens,
+    `${two.opens} opens before the verdict press, ${retried.opens} after it (mic="${retried.mic}")`);
+
+  // --- shape two: the service never answered at all -------------------------
+  // Same app, a different way for the mouth to be missing: the recogniser opens
+  // and reports sound, and then nothing ever comes back. This one ends through
+  // the ten-second deadline instead of an error, so it is the other path into the
+  // same verdict and it has to reach it too.
+  await page.addInitScript(WORDLESS_BUT_OPEN, false);
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(400);
+  const silentOne = await press(13000);
+  record("a service that never answers is described the same way, through the other path",
+    /no words came back/i.test(silentOne.text) && /speech service/i.test(silentOne.say),
+    `"${silentOne.text}" after the deadline`);
+  const silentTwo = await press(13000);
+  record("...and it reaches the same verdict on the second one",
+    silentTwo.mic === "Phrases" && /speech service/i.test(silentTwo.title),
+    `mic="${silentTwo.mic}"`);
+
+  await context.close();
+}
+
 /* -- stage C: a live recogniser, and barge-in ------------------------------- */
 
 async function liveStage(browser) {
@@ -372,6 +528,19 @@ async function liveStage(browser) {
       await deadRecogniserStage(browser);
     } catch (e) {
       record("dead-recogniser stage ran to completion", false, (e.message || "").split("\n")[0]);
+    }
+    await browser.close();
+  }
+
+  console.log("\n-- B2. a recogniser that opens, reports sound, and returns no words --");
+  {
+    const browser = await chromium.launch({
+      args: ["--use-fake-ui-for-media-stream", "--use-fake-device-for-media-stream"],
+    });
+    try {
+      await wordlessStage(browser);
+    } catch (e) {
+      record("wordless-recogniser stage ran to completion", false, (e.message || "").split("\n")[0]);
     }
     await browser.close();
   }

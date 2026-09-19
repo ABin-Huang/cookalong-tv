@@ -928,12 +928,146 @@ const record = (name, pass, detail) => {
   });
   await freshPage();
 
+  // --- sound in, no words out ------------------------------------------------
+
+  // The failure this app answered worst, and the one this block exists for.
+  // Measured on this machine: microphone open, real audio played into it, and
+  // both engines report that sound arrived — `soundstart`, `speechstart` — and
+  // then one returns an empty result and the other returns nothing at all. The
+  // old answer to that was "I did not hear anything — try again, a little closer
+  // to the microphone": advice about the one part of the loop the platform had
+  // just said was working, given by an app that already had the evidence.
+  //
+  // A fault injection rather than a scripted stub: the engine is replaced by the
+  // exact shape the installed browsers produce — it opens, it reports sound, and
+  // the service then has nothing to say about it.
+  const wordlessMic = () => page.evaluate(() => {
+    window.__opens = 0;
+    window.SpeechRecognition = class {
+      start() {
+        // Counted, because "the microphone opened again" is a question about this
+        // call and not about the screen a moment later: this recogniser fails
+        // within a tenth of a second, so anything that samples the state
+        // afterwards is reading the next failure, not the retry.
+        window.__opens += 1;
+        setTimeout(() => {
+          if (this.onstart) this.onstart();
+          if (this.onaudiostart) this.onaudiostart();
+          if (this.onsoundstart) this.onsoundstart();
+          if (this.onspeechstart) this.onspeechstart();
+          setTimeout(() => { if (this.onerror) this.onerror({ error: "no-speech" }); }, 80);
+        }, 40);
+      }
+      stop() { /* never reports an end */ }
+      abort() { /* nothing to abort */ }
+    };
+  });
+  const readVerdict = () => page.evaluate(() => {
+    const log = JSON.parse(localStorage.getItem("cookalong.voice-log.v1") || "[]");
+    const last = [...log].reverse().find(t => t.who === "cookalong");
+    return {
+      text: document.getElementById("voice-text").textContent,
+      state: document.getElementById("voice-status").dataset.state,
+      mic: document.getElementById("mic-label").textContent.trim(),
+      title: document.getElementById("btn-voice").title,
+      say: last ? last.text : "",
+      panel: !document.getElementById("conversation-panel").classList.contains("hidden"),
+      rows: document.querySelectorAll("#convo-help-list .cmd-run").length,
+    };
+  });
+
+  await page.evaluate(() => {
+    localStorage.setItem("cookalong.voice-lang.v1", "en-US");
+    localStorage.setItem("cookalong.voice-lang-chosen.v1", "1");
+    localStorage.removeItem("cookalong.voice-log.v1");
+  });
+  await freshPage();
+  await wordlessMic();
+
+  await page.click("#btn-voice");
+  await page.waitForFunction(
+    () => document.getElementById("voice-status").dataset.state === "error",
+    null, { timeout: 4000 });
+  const firstWordless = await readVerdict();
+  record("a recogniser that reports sound and returns no words is not reported as the cook's silence",
+    /no words came back/i.test(firstWordless.text) && !/closer to the microphone/i.test(firstWordless.text),
+    `"${firstWordless.text}"`);
+  record("...and the message it was measured with never claims the microphone is at fault",
+    /speech service/i.test(firstWordless.say) && !/closer/i.test(firstWordless.say),
+    `"${firstWordless.say.slice(0, 130)}"`);
+  record("...and one such listen is not enough to change what the button does",
+    firstWordless.mic === "Voice", `mic="${firstWordless.mic}"`);
+
+  // The second one is the verdict — and it is a verdict about the speech service
+  // rather than about the cook's hardware, which is the distinction the old copy
+  // had backwards. The press that produces it is also the press that has to hand
+  // over the input that works, because from here the microphone is not on offer.
+  await page.click("#btn-voice");
+  await page.waitForFunction(
+    () => !document.getElementById("conversation-panel").classList.contains("hidden"),
+    null, { timeout: 4000 });
+  const wordlessVerdict = await readVerdict();
+  record("twice in a row is a verdict, and it names the speech service, not the microphone",
+    wordlessVerdict.mic === "Phrases" && /speech service/i.test(wordlessVerdict.say) &&
+      !/microphone is not opening/i.test(wordlessVerdict.say) &&
+      /speech service/i.test(wordlessVerdict.title),
+    `mic="${wordlessVerdict.mic}" title="${wordlessVerdict.title}" "${wordlessVerdict.say.slice(0, 110)}"`);
+  record("...and the press that produced it is the press that opens the list",
+    wordlessVerdict.rows > 5, `${wordlessVerdict.rows} selectable rows`);
+
+  // Measured beats assumed, in the one place a cook goes to find out what is
+  // wrong. `recognition.supported` reports that the constructor exists, which it
+  // does on exactly the screen whose recogniser has just been watched failing.
+  await page.click("#btn-convo-close");
+  await page.waitForTimeout(200);
+  await page.click("#btn-selfcheck");
+  await page.waitForTimeout(400);
+  const checkRow = await page.evaluate(() => {
+    const row = [...document.querySelectorAll("#selfcheck-list .probe-row")]
+      .find(r => /Voice input/i.test(r.textContent || ""));
+    return row ? row.textContent.replace(/\s+/g, " ").trim() : "";
+  });
+  record("the device check reports the measurement, not that the API exists",
+    /speech service/i.test(checkRow) && /not working/i.test(checkRow),
+    `"${checkRow}"`);
+  await page.click("#btn-selfcheck-close");
+  await page.waitForTimeout(200);
+
+  // And it is not permanent. A written-off input that cannot be tested again is
+  // a screen the cook has lost for the rest of the cook, so the press after the
+  // verdict opens the microphone once more rather than re-running the verdict.
+  // Counted from the recogniser's own `start()`, because this fault fails again
+  // immediately — an assertion that read the screen instead would be reading the
+  // failure that follows the retry.
+  const opensBefore = await page.evaluate(() => window.__opens || 0);
+  await page.click("#btn-voice");
+  await page.waitForTimeout(700);
+  const retry = await page.evaluate(() => ({
+    opens: window.__opens || 0,
+    mic: document.getElementById("mic-label").textContent.trim(),
+  }));
+  record("a verdict is not permanent — the press after it opens the microphone again",
+    retry.opens > opensBefore,
+    `${opensBefore} opens before that press, ${retry.opens} after it (mic="${retry.mic}")`);
+
+  // Whatever that press ended up doing, it has left the app in its own state and
+  // may have put the list back up. Closing it is a cleanup, not an assertion, so
+  // it must not be able to fail the run.
+  await page.click("#btn-convo-close").catch(() => {});
+  await page.waitForTimeout(250);
+  await restoreRealMic();
+  await page.evaluate(() => {
+    localStorage.removeItem("cookalong.voice-lang.v1");
+    localStorage.removeItem("cookalong.voice-lang-chosen.v1");
+    localStorage.removeItem("cookalong.voice-log.v1");
+  });
+  await freshPage();
+
   // --- the conductor: one request, a finished job ---------------------------
 
   // Said in whatever language the app is in right now, read from the table
-  // rather than hard-coded: the check above deliberately left it in the other
-  // one, and a job that only works in English is exactly what that block exists
-  // to prevent.
+  // rather than hard-coded: the blocks above move the language about on purpose,
+  // and a job that only works in English is exactly what they exist to prevent.
   const langNow = (await shownLang()).id;
   const cnNow = /^zh/i.test(langNow || "");
   const jobPhrase = await page.evaluate(cn => {
