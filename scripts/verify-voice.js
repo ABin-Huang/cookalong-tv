@@ -158,6 +158,20 @@ async function deadRecogniserStage(browser) {
   await page.addInitScript(NEVER_EMITS);
   await page.goto(TARGET, { waitUntil: "load" });
   await page.evaluate(() => localStorage.clear());
+  // The cook picks a language first, because this stage is about a microphone
+  // that never opens and not about language.
+  //
+  // That distinction is load-bearing and was learned the hard way. A missing
+  // speech model and a missing microphone are indistinguishable from inside the
+  // page — `start()` is accepted and nothing follows either way — so with a
+  // language the cook never chose, the app spends the first press finding out
+  // which of the two it is. That test is real, and it is checked at the end of
+  // this stage; it just is not this stage. A language the cook chose is never
+  // tested, which is what lets this stage ask its question on the first press.
+  await page.evaluate(() => {
+    localStorage.setItem("cookalong.voice-lang.v1", "en-US");
+    localStorage.setItem("cookalong.voice-lang-chosen.v1", "1");
+  });
   await page.reload({ waitUntil: "load" });
   await page.waitForTimeout(400);
   await openRecipe(page, "tomato-basil-pasta");
@@ -221,6 +235,53 @@ async function deadRecogniserStage(browser) {
       Number.isFinite(from) && to === from + 1,
       `"${before}" -> "${after.step}" by clicking the row`);
   }
+
+  // --- the same dead microphone, under a language nobody chose ---------------
+
+  // The report this exists for: "I tried many times and nothing happened". On a
+  // machine whose browser is Chinese, the recogniser opens in Chinese, an
+  // English sentence comes back as nothing at all, and the only thing the cook
+  // was ever told was something about their phrase. The press below is the first
+  // half of the fix: the guess gets tested before the cook gets blamed.
+  //
+  // Back to the bare defect — the same recogniser that emits nothing — with only
+  // the language choice removed, so what changes between the two halves of this
+  // stage is exactly one thing: whether the cook picked a language.
+  await page.evaluate(() => {
+    localStorage.removeItem("cookalong.voice-lang-chosen.v1");
+    localStorage.setItem("cookalong.voice-lang.v1", "en-US");
+  });
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(400);
+
+  const guessedBefore = await page.evaluate(() =>
+    (document.getElementById("btn-lang").innerText || "").replace(/[🌐🎙\s]/g, ""));
+  await page.click("#btn-voice");
+  await page.waitForFunction(
+    () => document.getElementById("voice-status").dataset.state === "error",
+    null, { timeout: DEAD_WAIT_MS + 4000 }
+  );
+  const probed = await readBar(page);
+  const guessedAfter = await page.evaluate(() =>
+    (document.getElementById("btn-lang").innerText || "").replace(/[🌐🎙\s]/g, ""));
+  record("a language the cook never picked is tested before the microphone is written off",
+    probed.micLabel === "Voice" && guessedAfter !== guessedBefore &&
+      guessedAfter === "中文" && /trying 中文/i.test(probed.text),
+    `"${guessedBefore}" -> "${guessedAfter}", mic still "${probed.micLabel}": "${probed.text}"`);
+  record("and the guess is put back the moment the other language fails too",
+    await (async () => {
+      await page.click("#btn-voice");
+      await page.waitForFunction(
+        () => document.getElementById("voice-status").dataset.state === "error",
+        null, { timeout: DEAD_WAIT_MS + 4000 }
+      );
+      const after = await readBar(page);
+      const langNow = await page.evaluate(() =>
+        (document.getElementById("btn-lang").innerText || "").replace(/[🌐🎙\s]/g, ""));
+      return after.micLabel === "Phrases" && langNow === guessedBefore &&
+        /both languages/i.test(after.text);
+    })(),
+    `back to "${guessedBefore}", mic becomes the list, verdict names both languages`);
 
   await context.close();
 }

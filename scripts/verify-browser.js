@@ -53,6 +53,10 @@ try {
 }
 
 const URL = process.env.COOKALONG_URL || "http://localhost:8080/index.html";
+// The command table, so a check can ask the engine which language is "the other
+// one" instead of hard-coding it. The page loads the same file, which is the
+// point: the table is the one place that decides what the app can answer.
+const VC = require("../src/voice-commands.js");
 const results = [];
 const record = (name, pass, detail) => {
   results.push({ name, pass, detail });
@@ -418,6 +422,42 @@ const record = (name, pass, detail) => {
     else delete window.SpeechRecognition;
   });
 
+  /**
+   * The language the screen says the microphone is in.
+   *
+   * Read off the control a cook reads it off, never out of localStorage: these
+   * checks are about the bar and the recogniser agreeing, and a value read from
+   * the store would agree with itself no matter what the cook can see. Both
+   * controls are returned for the same reason — there are two of them now, and
+   * a switcher whose two copies can disagree is a switcher that teaches the
+   * wrong phrases.
+   */
+  const shownLang = () => page.evaluate(() => {
+    const eng = window.CookalongVoiceCommands;
+    const strip = t => (t || "").replace(/[🌐🎙\s]/g, "");
+    const byName = t => eng.LANGS.find(l => l.label === t || l.short === t) || {};
+    const bar = document.getElementById("btn-lang");
+    const panel = document.getElementById("btn-convo-lang");
+    // innerText on the bar, so the two-character form that a narrow screen
+    // switches to is not counted as a third name for the same language.
+    const barName = strip(bar && (bar.innerText || bar.textContent));
+    const panelName = strip(panel && panel.textContent);
+    const barFound = byName(barName);
+    const panelFound = byName(panelName);
+    return {
+      id: barFound.id || null,
+      label: barName,
+      panelId: panelFound.id || null,
+      panelLabel: panelName,
+      agrees: !!barFound.id && barFound.id === panelFound.id,
+      inTopbar: !!(bar && bar.closest("#topbar")),
+      inPanel: !!(bar && bar.closest("#conversation-panel")),
+      nav: navigator.language,
+      taught: [...document.querySelectorAll("#cheatsheet-list .cmd-say")]
+        .map(e => e.textContent.replace(/[“”]/g, "")),
+    };
+  });
+
   // A fresh document, and therefore a fresh verdict about this browser's
   // recogniser. The app remembers that a microphone was caught never opening —
   // that is the fix — so a check that needs the app to still be willing to try
@@ -488,6 +528,21 @@ const record = (name, pass, detail) => {
 
   // And the dead end itself: with a browser that says it can listen and then
   // says nothing, the screen has to give up and say so.
+  //
+  // The cook picks a language first, because this block is about a device that
+  // cannot listen and not about a language. That is the honest way to ask the
+  // question: with a language the cook never chose, the app is entitled to spend
+  // one press testing the guess first, and the verdict below would not arrive
+  // until the second try. A choice is not a guess and is never tested — which is
+  // itself a claim, so it is checked here as well.
+  await page.evaluate(() => {
+    localStorage.setItem("cookalong.voice-lang.v1",
+      /^zh/i.test(navigator.language || "") ? "zh-CN" : "en-US");
+    localStorage.setItem("cookalong.voice-lang-chosen.v1", "1");
+  });
+  await page.reload({ waitUntil: "load" });
+  await page.waitForTimeout(500);
+
   await page.click("#btn-voice");
   await page.waitForTimeout(4600);
   const afterSilence = await page.evaluate(() => ({
@@ -500,6 +555,9 @@ const record = (name, pass, detail) => {
     afterSilence.state !== "listening" && !afterSilence.button &&
       afterSilence.log.some(t => t.who === "cookalong" && /microphone/i.test(t.text)),
     `state="${afterSilence.state}" text="${afterSilence.text}"`);
+  record("a language the cook chose is never second-guessed, however empty the microphone is",
+    !/Trying .* instead/.test(afterSilence.text),
+    `line="${afterSilence.text}"`);
 
   // The half that was missing. Saying "no microphone" is honest but useless on
   // its own: the cook is left holding a control that has just told them it does
@@ -549,7 +607,13 @@ const record = (name, pass, detail) => {
   // The other half of the same trap: if the timeout left the control thinking a
   // session was still running, the next tap would be a request to stop it, and
   // the button would be dead for the rest of the cook. A fresh page so that the
-  // microphone is still on offer — see `freshPage`.
+  // microphone is still on offer — see `freshPage`. The language choice made
+  // above is put back to a guess here, so the checks that read the default
+  // language later are reading the default and not a leftover.
+  await page.evaluate(() => {
+    localStorage.removeItem("cookalong.voice-lang.v1");
+    localStorage.removeItem("cookalong.voice-lang-chosen.v1");
+  });
   await freshPage();
   await page.evaluate(() => {
     window.SpeechRecognition = class {
@@ -669,13 +733,39 @@ const record = (name, pass, detail) => {
   // An utterance the app does not understand has to say so, and point at the
   // list — silence is what makes a cook think the microphone is broken.
   await say("banana submarine");
-  const unclear = await page.evaluate(() => ({
-    state: document.getElementById("voice-status").dataset.state,
-    text: document.getElementById("voice-text").textContent,
-  }));
+  const unclear = await page.evaluate(() => {
+    const eng = window.CookalongVoiceCommands;
+    const bar = document.getElementById("btn-lang");
+    const shown = (bar && (bar.innerText || bar.textContent) || "").replace(/[🌐🎙\s]/g, "");
+    const found = eng.LANGS.find(l => l.label === shown || l.short === shown) || {};
+    const line = document.getElementById("voice-text").textContent;
+    return {
+      state: document.getElementById("voice-status").dataset.state,
+      text: line,
+      // The two diagnostics that were missing: the transcript the app acted on,
+      // and the language it was listening in when it got it.
+      repeatsHeard: /banana submarine/.test(line),
+      namesLang: !!found.label && line.indexOf(found.label) !== -1,
+      lang: found.id || null,
+    };
+  });
   record("speech the app cannot place is answered honestly, and points at the list",
     unclear.state === "error" && /💬/.test(unclear.text),
     `state="${unclear.state}" text="${unclear.text}"`);
+  // "I didn't catch that" from a program that has just written a confident
+  // transcript down tells a cook nothing: it cannot distinguish a misheard word
+  // from a microphone that is not hearing anything, and it hides the one cause
+  // it cannot see — a recogniser opened in the wrong language.
+  record("a miss repeats the words it actually heard, and names the language it was listening in",
+    unclear.repeatsHeard && unclear.namesLang,
+    `heard=${unclear.repeatsHeard} namesLang=${unclear.namesLang} (${unclear.lang}) "${unclear.text}"`);
+  // Words came back, so the language was good enough to hear them. The phrase is
+  // what missed, so this path must NOT move the language — otherwise every
+  // English cook who says an unknown word loses their English microphone.
+  const afterMiss = await shownLang();
+  record("a miss does not touch the language, because words coming back means the language worked",
+    afterMiss.id === unclear.lang,
+    `still ${afterMiss.id} (${afterMiss.label})`);
 
   // A step command has to reach the recipe on screen, not just the matcher.
   await openRecipe("tomato-basil-pasta");
@@ -699,31 +789,25 @@ const record = (name, pass, detail) => {
   // phrase the app then teaches is a phrase that cannot work. Language and
   // taught list are checked together for that reason.
   const sortJoin = list => [...list].sort().join("|");
-  const readLang = () => page.evaluate(() => {
-    const eng = window.CookalongVoiceCommands;
-    const label = document.getElementById("btn-convo-lang").textContent.replace(/^🎙\s*/, "").trim();
-    const found = eng.LANGS.find(l => l.label === label) || {};
-    return {
-      id: found.id || null,
-      label,
-      nav: navigator.language,
-      taught: [...document.querySelectorAll("#cheatsheet-list .cmd-say")]
-        .map(e => e.textContent.replace(/[“”]/g, "")),
-    };
-  });
 
-  const started = await readLang();
+  const started = await shownLang();
   const wantsCn = /^zh/i.test(started.nav);
   record("the microphone starts in the browser's own language, not a fixed one",
     started.id === (wantsCn ? "zh-CN" : "en-US"),
     `navigator.language=${started.nav} -> ${started.id} (${started.label})`);
+  record("the language is on the top bar, readable before anything is opened or pressed",
+    started.inTopbar === true, `inTopbar=${started.inTopbar}`);
 
   const other = wantsCn ? "en-US" : "zh-CN";
-  await page.click("#btn-convo-badge");
-  await page.waitForTimeout(300);
-  await page.click("#btn-convo-lang");
+
+  // The bar alone, without opening anything. This is the discoverability half
+  // of the bug: the setting that decides whether the microphone understands a
+  // word at all used to live three taps deep in a dialog, so a cook whose
+  // browser is Chinese-defaulted had no way to find out why English did nothing
+  // — and no way to fix it once they suspected.
+  await page.click("#btn-lang");
   await page.waitForTimeout(500);
-  const switched = await readLang();
+  const switched = await shownLang();
   const taughtInOther = await page.evaluate(
     id => window.CookalongVoiceCommands.help(id).map(r => r.say), other);
   record("switching the language takes the taught list with it, in the same breath",
@@ -731,8 +815,26 @@ const record = (name, pass, detail) => {
       switched.taught.length === taughtInOther.length &&
       sortJoin(switched.taught) === sortJoin(taughtInOther),
     `${started.label} -> ${switched.label}, ${switched.taught.length} phrases taught`);
+  record("the same tap on the top bar moves the copy in the panel with it, so neither can teach a different setting",
+    switched.agrees && switched.panelId === other,
+    `bar="${switched.label}" (${switched.id}) panel="${switched.panelLabel}" (${switched.panelId})`);
+
+  // And back, both ways: the panel button is a control a cook still reaches, and
+  // a round trip is what proves the two are one switch rather than two. The
+  // panel has to be closed before the bar is used again — it is a dialog, and a
+  // dialog covers what is under it.
+  await page.click("#btn-convo-badge");
+  await page.waitForTimeout(300);
+  await page.click("#btn-convo-lang");
+  await page.waitForTimeout(500);
+  const roundTrip = await shownLang();
+  record("the panel's own button is the same switch, and the language round-trips through it",
+    roundTrip.id === started.id && roundTrip.agrees,
+    `${switched.label} -> ${roundTrip.label}, panel agrees=${roundTrip.agrees}`);
   await page.click("#btn-convo-close");
   await page.waitForTimeout(300);
+  await page.click("#btn-lang");
+  await page.waitForTimeout(400);
 
   await openRecipe("tomato-basil-pasta");
   await say("next step");
@@ -755,13 +857,84 @@ const record = (name, pass, detail) => {
   await page.click("#btn-back");
   await page.waitForTimeout(300);
 
+  // --- a language nobody chose, and a microphone that says nothing ----------
+
+  // The report this block exists for: "I tried many times and nothing
+  // happened". On a machine whose browser is Chinese, the recogniser opens in
+  // Chinese; an English sentence then comes back as nothing at all, the table
+  // misses, and all the cook was ever told was something about their phrase.
+  //
+  // The fix is not a smarter guess — it is to spend one press finding out
+  // whether the guess was the problem. `SpeechRecognition` listens in exactly
+  // one language, so trying the other one is the only test available.
+  await page.evaluate(() => {
+    localStorage.removeItem("cookalong.voice-lang.v1");
+    localStorage.removeItem("cookalong.voice-lang-chosen.v1");
+  });
+  await freshPage();
+
+  const guessed = await shownLang();
+  record("a language the cook never picked is not remembered as a choice",
+    guessed.id === (wantsCn ? "zh-CN" : "en-US"),
+    `bar shows ${guessed.id} (${guessed.label})`);
+
+  // A recogniser that accepts start() and then emits not one single event — the
+  // exact failure that has to be ruled out before the microphone can be blamed.
+  // Same shape as the browser this repo really runs on, not a scripted stub.
+  await page.evaluate(() => {
+    window.SpeechRecognition = class { start() {} stop() {} abort() {} };
+  });
+  await page.click("#btn-voice");
+  await page.waitForTimeout(2200);           // past LISTEN_START_MS
+  const probed = await page.evaluate(() => ({
+    state: document.getElementById("voice-status").dataset.state,
+    text: document.getElementById("voice-text").textContent,
+    mic: document.getElementById("mic-label").textContent.trim(),
+  }));
+  const afterProbe = await shownLang();
+  record("a guessed language is moved out of the way before the cook is blamed for it",
+    probed.state === "error" && afterProbe.id === VC.otherLang(guessed.id),
+    `${guessed.id} -> ${afterProbe.id} (${afterProbe.label}) "${probed.text}"`);
+  record("...and the message says which guess it was, and what it is trying instead",
+    new RegExp(guessed.label).test(probed.text) && new RegExp(afterProbe.label).test(probed.text),
+    `"${probed.text}"`);
+  // Before this, one silent try was enough to brand the screen as having no
+  // microphone: the button became "Phrases" and the next press opened the list
+  // instead of retrying. The language had not even been ruled out yet.
+  record("...and the device is not written off while the language is still untested",
+    probed.mic !== "Phrases", `mic button reads "${probed.mic}"`);
+
+  // The second silent try is the probe's own result. A search that can only find
+  // one answer is not a search — it must put the first language back, or one
+  // press leaves the cook stranded in a language they never chose.
+  await page.click("#btn-voice");
+  await page.waitForTimeout(2200);
+  const exhausted = await page.evaluate(() => ({
+    text: document.getElementById("voice-text").textContent,
+    mic: document.getElementById("mic-label").textContent.trim(),
+  }));
+  const restored = await shownLang();
+  record("a language that was only being tried is put back the moment it fails too",
+    restored.id === guessed.id && restored.agrees,
+    `${afterProbe.id} -> ${restored.id} (${restored.label})`);
+  record("and with both languages ruled out, the verdict is finally about the microphone",
+    /both languages/i.test(exhausted.text) && exhausted.mic === "Phrases",
+    `mic="${exhausted.mic}" "${exhausted.text}"`);
+
+  await restoreRealMic();
+  await page.evaluate(() => {
+    localStorage.removeItem("cookalong.voice-lang.v1");
+    localStorage.removeItem("cookalong.voice-lang-chosen.v1");
+  });
+  await freshPage();
+
   // --- the conductor: one request, a finished job ---------------------------
 
   // Said in whatever language the app is in right now, read from the table
   // rather than hard-coded: the check above deliberately left it in the other
   // one, and a job that only works in English is exactly what that block exists
   // to prevent.
-  const langNow = (await readLang()).id;
+  const langNow = (await shownLang()).id;
   const cnNow = /^zh/i.test(langNow || "");
   const jobPhrase = await page.evaluate(cn => {
     const cmd = window.CookalongVoiceCommands.COMMANDS.find(c => c.id === "agent-dinner");
@@ -997,18 +1170,75 @@ const record = (name, pass, detail) => {
       const text = document.getElementById("voice-text");
       const status = document.getElementById("voice-status");
       const topbar = document.getElementById("topbar");
+      const lang = document.getElementById("btn-lang");
+      const box = lang.getBoundingClientRect();
+      // What the line WANTS, measured off a clone rather than read from
+      // `scrollWidth`. A nowrap element with `text-overflow: ellipsis` reports
+      // the width the layout settled on, not the width the sentence needs — so
+      // the old version of this check passed for as long as the cap was cutting
+      // the sentence short, which is exactly the failure it claims to catch.
+      const probe = text.cloneNode(true);
+      probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;max-width:none;width:auto;left:-9999px";
+      document.body.appendChild(probe);
+      const need = Math.round(probe.getBoundingClientRect().width);
+      probe.remove();
       return {
-        clipped: text.scrollWidth > text.clientWidth + 1,
+        need,
+        have: text.clientWidth,
         line: text.textContent,
         barHeight: Math.round(topbar.getBoundingClientRect().height),
+        rowHeight: Math.max(...[...topbar.querySelectorAll("button")]
+          .filter(b => b.offsetParent !== null)
+          .map(b => Math.round(b.getBoundingClientRect().height))),
         statusInBar: Math.round(status.getBoundingClientRect().bottom) <= Math.round(topbar.getBoundingClientRect().bottom) + 1,
+        // The seventh control on the bar has to earn its room, and it earns it
+        // by still naming a language. An icon-only switcher would leave a cook
+        // who cannot read the label with no way to tell which recogniser is
+        // listening — the exact position the original bug put them in.
+        langName: (lang.innerText || "").trim(),
+        langOnScreen: box.width > 0 && box.height > 0 && box.right <= window.innerWidth + 1,
+        langInBar: Math.round(box.bottom) <= Math.round(topbar.getBoundingClientRect().bottom) + 1,
       };
     });
-    record("at 720p the line telling the cook how to talk is not cut off",
-      !bar.clipped && bar.statusInBar,
-      `clipped=${bar.clipped} line="${bar.line}"`);
+    record("at 720p the line telling the cook how to talk fits, rather than being cut off",
+      bar.have >= bar.need,
+      `needs ${bar.need}px, has ${bar.have}px — line="${bar.line}"`);
     record("the top bar stays one row tall at 720p, so it cannot push the answer off screen",
-      bar.barHeight <= 120, `height=${bar.barHeight}px`);
+      bar.barHeight <= 120 && bar.rowHeight <= 60,
+      `height=${bar.barHeight}px, tallest control ${bar.rowHeight}px`);
+    record("the language still has a name at 720p, and is on screen inside the bar",
+      /EN|English|中/.test(bar.langName) && bar.langOnScreen && bar.langInBar,
+      `chip="${bar.langName}" onScreen=${bar.langOnScreen} inBar=${bar.langInBar}`);
+
+    // Hands-free is the tightest case the bar has, because the mode that matters
+    // most to this app is also the one that makes this line bigger. The attribute
+    // is set rather than the mode switched, because what is measured here is the
+    // stylesheet at 720p, not the mode.
+    const wide = await small.evaluate(async () => {
+      const topbar = document.getElementById("topbar");
+      const text = document.getElementById("voice-text");
+      document.body.dataset.handsfree = "on";
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      const probe = text.cloneNode(true);
+      probe.style.cssText = "position:absolute;visibility:hidden;white-space:nowrap;max-width:none;width:auto;left:-9999px";
+      document.body.appendChild(probe);
+      const need = Math.round(probe.getBoundingClientRect().width);
+      probe.remove();
+      const tallest = Math.max(...[...topbar.querySelectorAll("button")]
+        .filter(b => b.offsetParent !== null)
+        .map(b => Math.round(b.getBoundingClientRect().height)));
+      const out = {
+        have: text.clientWidth,
+        need,
+        barHeight: Math.round(topbar.getBoundingClientRect().height),
+        tallest,
+      };
+      document.body.dataset.handsfree = "off";
+      return out;
+    });
+    record("and it still fits one row in hands-free, the mode that makes the line bigger",
+      wide.have >= wide.need && wide.barHeight <= 120 && wide.tallest <= 60,
+      `needs ${wide.need}px, has ${wide.have}px, bar ${wide.barHeight}px, tallest control ${wide.tallest}px`);
   } finally {
     await small.close();
   }
