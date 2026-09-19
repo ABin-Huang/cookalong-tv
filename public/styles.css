@@ -160,6 +160,19 @@ body {
   border-color: var(--accent);
   box-shadow: 0 12px 30px rgba(0, 0, 0, .5);
 }
+/* The microphone's language. A `.mic` like the rest, deliberately: it is not a
+   link or a label but a switch, and a Fire TV remote can only land on something
+   focusable. Louder than its neighbours, because it is the one control on this
+   bar whose wrong setting makes every other voice control look broken. */
+.lang-chip { border-color: var(--accent-2); color: var(--accent-2); font-weight: 700; }
+.lang-chip:hover { border-color: var(--accent-2); background: rgba(255,183,3,.12); }
+/* Chinese is not a preference here, it is a different recogniser. When the
+   microphone is in it, the chip says so the same way `.mic.active` says the
+   microphone is open — but without the pulse, because a setting is not a
+   moment. */
+.lang-chip.active { background: var(--accent-2); border-color: var(--accent-2); color: #16110c; animation: none; }
+#lang-short { display: none; }
+
 .chip.tv-focus, .btn.tv-focus, .mic.tv-focus, .pantry-chip.tv-focus { border-color: var(--accent-2); }
 
 /* ---- Ingredient swap panel ---- */
@@ -397,13 +410,34 @@ body[data-handsfree="on"] .step-card { min-height: 280px; }
   #timer-display { margin: 0 20px 24px; }
   .ingredients-list { grid-template-columns: 1fr; }
 }
-/* A 720p Fire TV gives the bar about 1280px for the logo, six controls and the
+/* A 720p Fire TV gives the bar about 1280px for the logo, seven controls and the
    standing line. The words on the two controls whose icons already say it are
    the first thing to go, because the line the cook has to read — how to talk to
    this screen — is the one that must not be cut off. The panel/shopping badges
    keep their text: they carry counts, which an icon cannot. */
 @media (max-width: 1500px) {
   #mic-label, #mute-label { display: none; }
+  /* The language keeps a name, unlike the two above, and it is the one thing
+     here that must not become icon-only: "EN" and "中" still say which
+     recogniser is open, which is the only question this control answers. */
+  #lang-label { display: none; }
+  #lang-short { display: inline; }
+  /* The logo is the only thing on this bar that is not information — at 720p it
+     is a page title and nothing else — so it is what shrinks first. Two
+     characters of it are worth more as room for the sentence beside it. */
+  .logo { font-size: 18px; }
+  #topbar { padding: 10px 16px; }
   .mic { padding: 8px 14px; }
-  .voice-status { font-size: 18px; gap: 10px; }
+  .voice-status { font-size: 18px; gap: 8px; }
+  /* And the line stops being capped. `max-width: 52ch` is a reading measure, not
+     a layout one, and on a bar this tight it silently truncated the sentence it
+     was there to protect: the Chinese resting line needs 429px and the cap gave
+     it 351, so "or press 💬 to see what you can say" was cut off on every 720p
+     screen — while the check that was supposed to catch it passed, because
+     `scrollWidth` on a nowrap element with `text-overflow` reports what the
+     layout decided rather than what the text wanted. The cap is lifted and the
+     line takes whatever the controls leave, which is what it should have been
+     doing all along. */
+  .voice-status { flex: 1 1 auto; min-width: 0; }
+  #voice-text { max-width: none; flex: 1 1 auto; min-width: 0; }
 }

@@ -24,6 +24,23 @@
       <button id="btn-voice" class="mic" title="Talk to this screen (browser speech recognition)">
         <span id="mic-icon">🎙</span><span id="mic-label">Voice</span>
       </button>
+      <!-- The language the microphone listens in, on the bar rather than inside
+           the 💬 panel where it used to live.
+
+           A recognition session takes exactly one language, so a cook whose
+           browser is Chinese-defaulted and who speaks English is not partly
+           understood — nothing at all comes back, and every phrase the app
+           teaches them is a phrase that cannot work. The setting that decides
+           this was three taps deep in a dialog, so the answer to "why does it
+           ignore me?" was invisible. Two forms of the name live side by side:
+           the full one where there is room, and the two characters a 720p bar
+           can afford. The short form has to identify the language rather than
+           abbreviate a word, because the cook switching it may be the one who
+           cannot read the other label. -->
+      <button id="btn-lang" class="mic lang-chip" title="The language the microphone listens in — activate to switch"
+              aria-pressed="false" aria-label="Microphone language: English. Activate to switch.">
+        <span aria-hidden="true">🌐</span><span id="lang-label">English</span><span id="lang-short">EN</span>
+      </button>
       <!-- Hands-free is a mode, not a command, so it needs a control that says
            whether it is ON — a cook with both hands in a bowl has no other way
            to tell whether the screen is still listening to them. -->

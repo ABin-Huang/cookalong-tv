@@ -1138,7 +1138,27 @@
    * work. The default follows the browser, and the cook can change it.
    */
   const VOICE_LANG_KEY = "cookalong.voice-lang.v1";
+  /**
+   * Whether the cook ever picked a language themselves.
+   *
+   * Kept in a second key rather than inferred from the first, because the two
+   * are different facts and only one of them may be overruled. `voiceLang`
+   * begins as the app's guess from `navigator.language`; a guess is allowed to
+   * be wrong — the whole "it never answers me" bug is a guess made in a language
+   * nobody chose. A choice is not a guess, and nothing here may second-guess it.
+   */
+  const VOICE_LANG_CHOSEN_KEY = "cookalong.voice-lang-chosen.v1";
   let voiceLang = "en-US";
+  let voiceLangChosen = false;
+  /**
+   * The language currently on trial, and the one to fall back to.
+   *
+   * Set only by `probeOtherLanguage`, and only while a language the cook never
+   * chose is being tested. Non-null means "we are mid-experiment", which is what
+   * makes the second empty result mean "so it is not the language" instead of
+   * starting the same experiment again.
+   */
+  let voiceLangProbe = null;
 
   function knownLangs() { return (VOICE && VOICE.LANGS) || []; }
 
@@ -1158,6 +1178,14 @@
     return voiceLang;
   }
 
+  function loadVoiceLangChosen() {
+    try { voiceLangChosen = localStorage.getItem(VOICE_LANG_CHOSEN_KEY) === "1"; }
+    catch (e) { voiceLangChosen = false; }
+    // A cook who has chosen a language is never mid-experiment.
+    if (voiceLangChosen) voiceLangProbe = null;
+    return voiceLangChosen;
+  }
+
   function saveVoiceLang() {
     try { localStorage.setItem(VOICE_LANG_KEY, voiceLang); } catch (e) { /* private mode */ }
   }
@@ -1167,6 +1195,12 @@
   function langLabel(id) {
     const found = knownLangs().find(l => l.id === id);
     return found ? found.label : id;
+  }
+
+  /** "EN" / "中" — the compact form, for a bar a 720p screen has to fit. */
+  function langShortLabel(id) {
+    const found = knownLangs().find(l => l.id === id);
+    return (found && found.short) || langLabel(id);
   }
 
   /**
@@ -1189,16 +1223,36 @@
    * Switch the microphone between the languages the table answers in, and take
    * everything that teaches or listens with it: the two command lists, the
    * resting line, and — next time it opens — the recogniser.
+   *
+   * Two places show the language and one function writes both, because "which
+   * language is it in" is a single fact: the chip on the top bar, which is where
+   * a cook finds out the setting exists, and the button in the conversation
+   * panel, which used to be the only copy and was three taps from the symptom.
    */
   function applyVoiceLang() {
     const label = langLabel(voiceLang);
-    const btn = $("btn-convo-lang");
-    if (btn) {
-      btn.textContent = `🎙 ${label}`;
-      btn.setAttribute("aria-label", `Microphone language: ${label}. Activate to switch.`);
-      btn.setAttribute("aria-pressed", String(isChinese()));
-      btn.classList.toggle("active", isChinese());
+    const aria = `Microphone language: ${label}. Activate to switch.`;
+
+    const panel = $("btn-convo-lang");
+    if (panel) {
+      panel.textContent = `🎙 ${label}`;
+      panel.setAttribute("aria-label", aria);
+      panel.setAttribute("aria-pressed", String(isChinese()));
+      panel.classList.toggle("active", isChinese());
     }
+
+    const chip = $("btn-lang");
+    if (chip) {
+      chip.setAttribute("aria-label", aria);
+      chip.setAttribute("aria-pressed", String(isChinese()));
+      chip.classList.toggle("active", isChinese());
+      chip.title = `The microphone listens in ${label} — activate to switch`;
+    }
+    const long = $("lang-label");
+    if (long) long.textContent = label;
+    const short = $("lang-short");
+    if (short) short.textContent = langShortLabel(voiceLang);
+
     renderCommandList($("cheatsheet-list"));
     renderCommandList($("convo-help-list"));
     setDefaultVoiceStatus();
@@ -1210,6 +1264,13 @@
     const at = langs.findIndex(l => l.id === voiceLang);
     voiceLang = langs[(at + 1) % langs.length].id;
     saveVoiceLang();
+    // This is the cook deciding, so the app stops guessing. The language is no
+    // longer something it may correct on its own, and any trial that was running
+    // has just been answered by hand — including in favour of the language the
+    // probe had moved away from.
+    voiceLangChosen = true;
+    voiceLangProbe = null;
+    try { localStorage.setItem(VOICE_LANG_CHOSEN_KEY, "1"); } catch (e) { /* private mode */ }
     // A missing speech model is per-language, so the verdict from the last
     // language says nothing about this one. Switching languages is a real change
     // of circumstances and has to be allowed to clear the record.
@@ -1224,6 +1285,82 @@
         : "You can say “next step”, or name what is in your kitchen."}`,
     });
     applyVoiceLang();
+  }
+
+  /**
+   * Try the other language, once, when nothing came back at all.
+   *
+   * This is the answer to the report this section exists for: "I tried many
+   * times and nothing happened". A recogniser is opened in exactly one language,
+   * so a cook whose browser is Chinese-defaulted and who speaks English is not
+   * half-understood — nothing comes back, every time, and the app blamed the
+   * phrase. `SpeechRecognition` cannot listen in two languages at once, so the
+   * only test available is to try the other one.
+   *
+   * Three properties keep that from being a nuisance:
+   *
+   * - It only runs when the language was never chosen. A cook who picked one has
+   *   picked it, and the app does not overrule them.
+   * - It only runs when NOTHING came back. A phrase the app merely does not know
+   *   still produced words, and words mean the recogniser's language was good
+   *   enough to hear them — so the language is not what needs changing there.
+   * - It is a probe, not a switch. It remembers where it started, and if the
+   *   other language comes back empty too it puts the first one back and stops.
+   *   So one press can never strand a cook in a language they did not choose,
+   *   and the search always ends where it began.
+   *
+   * Returns "probe" when it has taken over the answer, "exhausted" when both
+   * languages have now come back empty, and null when it does not apply.
+   */
+  function probeOtherLanguage(kind) {
+    if (voiceLangChosen || !VOICE || knownLangs().length < 2) return null;
+    const was = voiceLang;
+
+    // The probe has already run, and this is its result: the other language was
+    // empty too. Put the first one back and hand the caller the verdict, which
+    // is now about the microphone rather than the language. Nothing is written
+    // to the store on the way back, because nothing was written on the way out —
+    // see below.
+    if (voiceLangProbe) {
+      voiceLang = voiceLangProbe.from;
+      voiceLangProbe = null;
+      applyVoiceLang();
+      return "exhausted";
+    }
+
+    voiceLang = VOICE.otherLang(voiceLang);
+    voiceLangProbe = { from: was };
+    // Deliberately NOT saved. A probe is an experiment, and an experiment that
+    // has not answered a single command yet is not evidence about this cook. If
+    // it were persisted, one silent try would silently rewrite the language the
+    // next page load starts in — a guess promoted to a preference by nothing at
+    // all. It is saved by `respond` only once it has carried a real command.
+    applyVoiceLang();
+
+    const now = langLabel(voiceLang);
+    // Named, not coded: the bar and the spoken sentence say "中文", never
+    // "zh-CN". A cook being told which language the screen is listening in is
+    // being told something they can act on.
+    const wasLabel = langLabel(was);
+    const opener = kind === "deaf"
+      ? `Nothing came through the microphone at all, and it was set to ${wasLabel}`
+      : `I did not make out any words while listening in ${wasLabel}`;
+    answer({
+      state: "error",
+      // Both names on the bar: which guess is being abandoned, and which one is
+      // being tried instead. This is the line that turns "it never answers" into
+      // a cook who knows to say it once more.
+      status: `No words in ${wasLabel} — trying ${now}`,
+      say: `${opener}. You have never chosen a language for me, so I guessed that one from ` +
+        `your browser, and it may simply be the wrong guess. I have switched the microphone ` +
+        `to ${now}: press 🎙 and say it again.` +
+        // Nothing came back, so this is a miss by every definition the mode
+        // uses — and the counter that stops a mode re-opening a dead microphone
+        // forever has to see it. A probe that skipped the count would leave
+        // hands-free looping through an experiment it could never finish.
+        handsFreeMissed(),
+    });
+    return "probe";
   }
 
   /* A browser can expose SpeechRecognition, accept start(), and then emit
@@ -1880,11 +2017,13 @@
           : "🙌 Hands-free is on — press 🎙 once to start, and I keep listening after that";
       }
       // The line names the language the microphone is in, because that is the
-      // one setting a cook cannot see the effect of until it is too late.
+      // one setting a cook cannot see the effect of until it is too late. It
+      // used to name it only for Chinese, so the half of the world whose
+      // recogniser was set to the wrong language had nothing to read.
       if (isChinese()) return "🎙 中文 — 说“下一步”，或按 💬 看能说什么";
       return spoken
-        ? "Press 🎙 and talk — or 💬 to see what you can say"
-        : "Press 🎙 and talk — answers stay on screen here";
+        ? "🎙 English — press the mic and talk, or 💬 to see what you can say"
+        : "🎙 English — press the mic and talk; answers stay on screen here";
     }
     // The microphone has been tried and did not open. "This screen cannot
     // listen" was true but useless; naming the reason and pointing at the thing
@@ -2102,16 +2241,38 @@
     });
 
     if (!hit) {
-      // Honest, and pointed: say that it did not understand, and say where the
-      // list of things it does understand is. "Nothing happened" is the outcome
-      // that makes a cook conclude the microphone is broken.
+      // What was heard is the single most useful thing to say here, and it was
+      // the one thing the app never said. "I didn't catch that" from a program
+      // that has just written a confident transcript down is a non-sequitur;
+      // showing the transcript is what lets a cook tell a misheard word from a
+      // microphone that is not hearing them at all — and what lets a Chinese
+      // speaker spot that the recogniser is listening for English.
+      //
+      // No language probe here, deliberately. Words came back, so the language
+      // was good enough to hear them; the phrase is what missed. The probe is
+      // for the case where nothing comes back at all.
+      const short = said.length > 40 ? `${said.slice(0, 39)}…` : said;
       answer({
         state: "error",
-        status: "I didn't catch that — 💬 has the list",
-        say: `I did not catch “${said}”. I did not catch that. ` +
-          "Press the 💬 button to see what I can do, or try “what can I cook”.",
+        // Both facts, on the bar: the transcript, because it is the only thing
+        // that separates a misheard word from a microphone that is hearing
+        // nothing, and the language, because it is the one cause a cook cannot
+        // see for themselves. The longer explanation is spoken and written into
+        // the panel; the bar has room for the two that matter.
+        status: `Heard “${short}” in ${langLabel(voiceLang)} — 💬 for the list`,
+        say: `I heard “${said}”, and that is not one of my commands. I am listening in ` +
+          `${langLabel(voiceLang)} — if that is the wrong language, press 🌐 on the bar to ` +
+          `switch it. Or press 💬 to see what I can do.`,
       });
       return;
+    }
+
+    // A command the app understood is proof that the language the microphone is
+    // open in is the right one. A language being tried has just earned its
+    // place, so it stops being an experiment and starts being remembered.
+    if (voiceLangProbe) {
+      voiceLangProbe = null;
+      saveVoiceLang();
     }
 
     // Anything else ends the question. A cook who says "next step" instead of
@@ -2630,6 +2791,12 @@
         return;
       }
       if (voiceSession) voiceSession.handled = true;
+      // "No speech" is the recogniser reporting that it opened and heard nothing.
+      // That is the same evidence the empty end below acts on, so it gets the
+      // same one test: before blaming the cook's silence, rule out a language
+      // nobody chose. Checked here rather than in the generic error path because
+      // it is the only code in this list that is a miss rather than a defect.
+      if (code === "no-speech" && probeOtherLanguage("quiet") === "probe") return;
       // Not every error means the same thing. `not-allowed` is the cook's to fix
       // — the permission prompt — and `no-speech` is just silence, which is a
       // miss and not a defect. The rest are structural: this screen cannot
@@ -2660,10 +2827,17 @@
       const heard = (session.final || session.interim).trim();
       if (heard) { interpret(heard); return; }
       session.handled = true;
+      // Nothing came back at all. Before concluding the cook said nothing worth
+      // acting on, rule out the one cause they cannot see from here: a
+      // recogniser opened in a language nobody chose.
+      const probe = probeOtherLanguage("quiet");
+      if (probe === "probe") return;
       answer({
         state: "error",
         status: "I didn't catch that",
-        say: "I did not make out anything. Try again, or press 💬 to see what I can do." + handsFreeMissed(),
+        say: "I did not make out anything. Try again, or press 💬 to see what I can do." +
+          (probe === "exhausted" ? " I tried both languages, so it is not that." : "") +
+          handsFreeMissed(),
       });
     };
 
@@ -2691,6 +2865,14 @@
       // Same reason as the timeout above: an abandoned recogniser is a live
       // microphone, and a live microphone with a talking app is a feedback loop.
       stopVoiceRecognition();
+      // Before writing off the device, write off the guess. `start()` being
+      // accepted with nothing following is exactly what a missing speech model
+      // for THIS language looks like from inside the page — a browser with no
+      // Chinese model and a browser with no microphone are indistinguishable
+      // here, and the two need opposite answers. So a language the cook never
+      // chose gets one test before the verdict that closes the microphone.
+      const probe = probeOtherLanguage("deaf");
+      if (probe === "probe") return;
       // Keep the measurement. `start()` returning without throwing is not the
       // same as the microphone opening, and this is the only thing that tells
       // the two apart — so it is remembered and the button stops offering the
@@ -2700,15 +2882,24 @@
       applyCapabilityUI();
       answer({
         state: "error",
-        status: "No microphone is coming through",
+        // The verdict says what was ruled out, on the bar, because "no
+        // microphone" and "no microphone in your language" need different
+        // answers from the cook and only one of them is about the hardware.
+        status: probe === "exhausted"
+          ? "No microphone — and I tried both languages"
+          : "No microphone is coming through",
         say: "This screen is not picking up the microphone — the browser's speech service " +
-          "may be blocked, or there may be no microphone. Use the remote, or press 💬 and " +
-          "pick a phrase." + handsFreeMissed(),
+          "may be blocked, or there may be no microphone." +
+          (probe === "exhausted" ? " I tried both languages, so it is not that." : "") +
+          " Use the remote, or press 💬 and pick a phrase." + handsFreeMissed(),
       });
     }
 
     voiceListening = true;
-    setVoiceState("listening", `Listening${isChinese() ? " (中文)" : ""}… say something like “${examplePhrase()}”`);
+    // The language is named here, not only for Chinese as it was before. This is
+    // the one moment the cook can see why the microphone might not understand
+    // them, and half of them had no way to see it.
+    setVoiceState("listening", `Listening (${langLabel(voiceLang)})… say “${examplePhrase()}”`);
     armVoiceWatchdog(LISTEN_START_MS, onDeaf);
 
     try {
@@ -3708,7 +3899,11 @@
     if (reply) answer(reply);
   });
   $("btn-convo-badge").addEventListener("click", openConvo);
+  // Both controls that show the microphone's language run the same switch, so
+  // whichever one a cook finds first cannot teach them a different setting.
   $("btn-convo-lang").addEventListener("click", cycleVoiceLang);
+  const langChip = $("btn-lang");
+  if (langChip) langChip.addEventListener("click", cycleVoiceLang);
   $("btn-convo-close").addEventListener("click", closeConvo);
   $("btn-convo-clear").addEventListener("click", clearConvo);
   $("btn-convo-help").addEventListener("click", toggleConvoHelp);
@@ -3836,7 +4031,10 @@
     // read what was said.
     // The language has to be known before anything is rendered or listened for:
     // it decides which phrases are taught and which one the recogniser opens in.
+    // Whether the cook ever chose it has to be known too, because that is what
+    // decides whether the app may still correct the guess on its own.
     loadVoiceLang();
+    loadVoiceLangChosen();
     loadVoiceLog();
     renderConvo();
     renderConvoBadge();
