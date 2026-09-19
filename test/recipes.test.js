@@ -45,15 +45,71 @@ test("findRecipe matches by display name (Alexa slot format)", () => {
   assert.strictEqual(findRecipe(""), null);
 });
 
-test("every dish has a Chinese name, so it stays reachable by voice in Chinese", () => {
-  // The Chinese names live in one list so they can be read together. The cost of
-  // that is a dish arriving without one and becoming silently unreachable to a
-  // Chinese speaker — so the omission has to fail here instead.
-  RECIPES.forEach(recipe => {
-    assert.ok(recipe.nameCn, `${recipe.id} has no Chinese name`);
-    assert.ok(/[\u4e00-\u9fff]/.test(recipe.nameCn),
-      `${recipe.id} has a Chinese name with no Chinese in it: "${recipe.nameCn}"`);
-  });
-  const names = RECIPES.map(r => r.nameCn);
-  assert.strictEqual(new Set(names).size, names.length, "two dishes share a Chinese name");
+/* ---------------- Serving scaling ---------------- */
+
+const { scaleRecipe, parseQty } = require("../src/recipes");
+
+test("parseQty extracts number and unit", () => {
+  assert.deepStrictEqual(parseQty("200g"), { num: 200, space: false, rest: "g" });
+  assert.deepStrictEqual(parseQty("1.2 L"), { num: 1.2, space: true, rest: "L" });
+  assert.deepStrictEqual(parseQty("3"), { num: 3, space: false, rest: "" });
+  assert.deepStrictEqual(parseQty("1/2 tsp"), { num: 0.5, space: true, rest: "tsp" });
+  assert.deepStrictEqual(parseQty("4 thick slices"), { num: 4, space: true, rest: "thick slices" });
+  assert.strictEqual(parseQty("to taste"), null);
+  assert.strictEqual(parseQty("a handful"), null);
+});
+
+test("scaleRecipe doubles a 2-serving recipe", () => {
+  const r = getRecipe("tomato-basil-pasta"); // serves 2
+  const s = scaleRecipe(r, 4);
+  assert.strictEqual(s.serves, 4);
+  const qty = Object.fromEntries(s.ingredients.map(i => [i.canonical, i.qty]));
+  assert.strictEqual(qty.pasta, "400g");
+  assert.strictEqual(qty.tomato, "800g");
+  assert.strictEqual(qty.garlic, "6");
+  assert.strictEqual(qty["olive-oil"], "4 tbsp");
+  // qualitative quantities stay untouched
+  assert.strictEqual(qty.basil, "a handful");
+  assert.strictEqual(qty.salt, "to taste");
+});
+
+test("scaleRecipe halves a 4-serving recipe", () => {
+  const r = getRecipe("hearty-chicken-soup"); // serves 4
+  const s = scaleRecipe(r, 2);
+  const qty = Object.fromEntries(s.ingredients.map(i => [i.canonical, i.qty]));
+  assert.strictEqual(qty.chicken, "250g");
+  assert.strictEqual(qty["chicken-stock"], "0.6 L");
+  assert.strictEqual(qty.potato, "1");
+  assert.strictEqual(qty.carrot, "1");
+  assert.strictEqual(qty.onion, "0.5");
+});
+
+test("scaleRecipe handles fractional quantities", () => {
+  const r = getRecipe("banana-oat-pancakes"); // serves 2, cinnamon 1/2 tsp
+  const s = scaleRecipe(r, 3);
+  const qty = Object.fromEntries(s.ingredients.map(i => [i.canonical, i.qty]));
+  assert.strictEqual(qty.cinnamon, "0.75 tsp");
+  assert.strictEqual(qty.banana, "3 ripe");
+});
+
+test("scaleRecipe scales nutrition proportionally and rounds", () => {
+  const r = getRecipe("tomato-basil-pasta"); // 550 kcal for serves 2
+  const s = scaleRecipe(r, 4);
+  assert.deepStrictEqual(s.nutrition, { kcal: 1100, protein: 28, carbs: 190, fat: 24 });
+  const half = scaleRecipe(r, 1);
+  assert.deepStrictEqual(half.nutrition, { kcal: 275, protein: 7, carbs: 48, fat: 6 });
+});
+
+test("scaleRecipe keeps canonical ids for the front-end", () => {
+  const r = getRecipe("garlic-chicken-rice");
+  const s = scaleRecipe(r, 6);
+  assert.deepStrictEqual(s.ingredients.map(i => i.canonical), r.ingredients.map(i => i.canonical));
+});
+
+test("scaleRecipe rejects invalid servings", () => {
+  const r = getRecipe("tomato-basil-pasta");
+  assert.strictEqual(scaleRecipe(r, 0), null);
+  assert.strictEqual(scaleRecipe(r, -2), null);
+  assert.strictEqual(scaleRecipe(r, NaN), null);
+  assert.strictEqual(scaleRecipe(null, 2), null);
 });

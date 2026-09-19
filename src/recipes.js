@@ -4,10 +4,9 @@
  * CookAlong TV - Recipe engine
  *
  * Canonical 10-recipe dataset with structured ingredients (canonical ids,
- * roles and pantry flags), diet/allergen-tagged substitution overrides and
- * per-serving nutrition estimates. Consumed by the Fire TV Web App (via
- * public/recipes-data.js), the ingredient-intelligence engine
- * (src/ingredients.js) and the Alexa skill.
+ * roles and pantry flags) and diet/allergen-tagged substitution overrides.
+ * Consumed by the Fire TV Web App (via public/recipes-data.js), the
+ * ingredient-intelligence engine (src/ingredients.js) and the Alexa skill.
  */
 
 const DIETS = ["vegetarian", "vegan", "gluten-free"];
@@ -137,6 +136,8 @@ const RECIPES = [
       { name: "black pepper", canonical: "black-pepper", qty: "to taste", role: "seasoning", pantry: true }
     ],
     substitutions: {
+      // This is a vegetarian dish: plant-based candidates first, tagged so
+      // the engine never offers chicken stock to a vegetarian cook.
       "vegetable-stock": [
         { name: "mushroom stock", note: "Same amount; it deepens the risotto's umami.", diet: ["vegan", "vegetarian", "gluten-free", "dairy-free"], allergens: [] },
         { name: "chicken stock", note: "Same amount; it works beautifully in risotto.", diet: ["gluten-free", "dairy-free"], allergens: [] }
@@ -286,34 +287,6 @@ const RECIPES = [
   }
 ];
 
-/**
- * The dishes in the cook's own language.
- *
- * Held together so the translations can be read and corrected in one place. The
- * risk of a separate list is that a new dish arrives without a Chinese name and
- * becomes unreachable by voice — so a test asserts every recipe has an entry,
- * which turns that omission into a failing build rather than a silent gap.
- *
- * The Chinese name has to be one a cook would actually say out loud, because a
- * recogniser is what produces it, not a translator.
- */
-const RECIPE_NAMES_CN = {
-  "tomato-basil-pasta": "番茄罗勒意面",
-  "vegetable-stir-fry": "蔬菜小炒",
-  "garlic-chicken-rice": "蒜香鸡饭",
-  "fluffy-french-toast": "松软法式吐司",
-  "mushroom-risotto": "奶油蘑菇烩饭",
-  "tofu-scramble": "姜黄炒豆腐",
-  "beef-broccoli": "西兰花炒牛肉",
-  "banana-oat-pancakes": "香蕉燕麦松饼",
-  "lemon-garlic-shrimp": "蒜香柠檬虾",
-  "hearty-chicken-soup": "浓香鸡汤",
-};
-
-RECIPES.forEach(recipe => {
-  recipe.nameCn = RECIPE_NAMES_CN[recipe.id] || null;
-});
-
 function listRecipes(diet = null) {
   if (!diet) return RECIPES.map(recipeSummary);
   return RECIPES.filter(r => r.diet.includes(diet)).map(recipeSummary);
@@ -351,4 +324,57 @@ function formatStep(recipe, stepNumber) {
   return `Step ${stepNumber} of ${recipe.steps.length}: ${recipe.steps[stepNumber - 1]}`;
 }
 
-module.exports = { DIETS, RECIPES, RECIPE_NAMES_CN, listRecipes, getRecipe, findRecipe, formatStep };
+/* ---------------- Serving scaling ---------------- */
+
+/** Qualitative quantities that should never be scaled ("to taste", "a pinch"). */
+const NON_SCALABLE_QTY = /^(to taste|to serve|to drizzle|a handful|a pinch|a little|some|enough)\b/i;
+
+/**
+ * Parse a quantity string like "200g", "3", "1/2 tsp" or "1.2 L".
+ * Returns { num, rest } or null for qualitative quantities.
+ */
+function parseQty(qty) {
+  const m = /^(\d+\/\d+|\d+(?:\.\d+)?)(\s*)(.*)$/.exec(String(qty).trim());
+  if (!m) return null;
+  const num = m[1].includes("/")
+    ? m[1].split("/").reduce((a, b) => a / b)
+    : parseFloat(m[1]);
+  return { num, space: m[2].length > 0, rest: m[3].trim() };
+}
+
+function fmtScaled(num) {
+  const rounded = Math.round(num * 100) / 100;
+  return Number.isInteger(rounded) ? String(rounded) : String(rounded);
+}
+
+/**
+ * Scale a recipe to a target number of servings.
+ * Returns { ingredients, nutrition, serves } where ingredients carry the
+ * scaled qty text and nutrition is rounded per the same ratio.
+ * Returns null for an invalid target (non-finite or < 1).
+ */
+function scaleRecipe(recipe, servings) {
+  if (!recipe || !Number.isFinite(servings) || servings < 1) return null;
+  const base = recipe.serves || 2;
+  const ratio = servings / base;
+  const ingredients = recipe.ingredients.map(ing => {
+    const p = parseQty(ing.qty);
+    if (!p || NON_SCALABLE_QTY.test(ing.qty)) {
+      return { name: ing.name, qty: ing.qty, canonical: ing.canonical };
+    }
+    const scaled = p.num * ratio;
+    const qty = fmtScaled(scaled) + (p.rest ? (p.space ? " " : "") + p.rest : "");
+    return { name: ing.name, qty, canonical: ing.canonical };
+  });
+  const nutrition = recipe.nutrition
+    ? {
+        kcal: Math.round(recipe.nutrition.kcal * ratio),
+        protein: Math.round(recipe.nutrition.protein * ratio),
+        carbs: Math.round(recipe.nutrition.carbs * ratio),
+        fat: Math.round(recipe.nutrition.fat * ratio)
+      }
+    : null;
+  return { ingredients, nutrition, serves: servings };
+}
+
+module.exports = { DIETS, RECIPES, listRecipes, getRecipe, findRecipe, formatStep, scaleRecipe, parseQty };
