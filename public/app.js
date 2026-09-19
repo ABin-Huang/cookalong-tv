@@ -1385,6 +1385,21 @@
   const LISTEN_LIMIT_MS = 10000;
 
   /**
+   * How many listens in a row may put sound in front of the recogniser and get
+   * no words back before the app stops offering to listen.
+   *
+   * Both halves of that condition are the platform's own reports and not
+   * inferences: `onsoundstart` and `onspeechstart` are the recogniser saying
+   * audio reached it, and an empty `final`, `interim` and transcript is it
+   * saying none of that audio became words. One such listen is a cough; two in a
+   * row is a mode that is not working, and the cook is owed the input that does
+   * work rather than a third wait. Two and not one, for the same reason the
+   * language guess gets two: a single miss must never be enough to change what
+   * the button does.
+   */
+  const VOICE_WORDLESS_MAX = 2;
+
+  /**
    * How long an answer is allowed to hold the top bar before the line goes back
    * to offering the next move.
    *
@@ -1452,6 +1467,33 @@
   let voiceInputRetry = false;
 
   /**
+   * Why the button stopped offering to listen.
+   *
+   * Two reasons end in the same place and are not the same fact. `"mic"` is a
+   * microphone that never opened: `start()` was accepted and not one event
+   * followed. `"service"` is the opposite shape — the microphone opened, the
+   * recogniser reported sound, and the speech service returned no words — which
+   * is what a browser whose speech backend is blocked or unreachable looks like
+   * from inside the page, and what this app answers with on a machine where
+   * Chrome's Google-backed recogniser cannot reach anything.
+   *
+   * Telling a cook their microphone is not opening when it is working perfectly
+   * is the same class of lie as the "Listening…" line that used to stay up
+   * forever, and it sends them to check hardware that is not broken. So the
+   * reason travels with the verdict and every line about it is built from it.
+   */
+  let voiceDeadReason = null;       // "mic" | "service"
+
+  /**
+   * Listens in a row that had sound in them and produced no words.
+   *
+   * Cleared by words actually coming back (see `interpret`), and deliberately
+   * not by a recogniser starting: every failing session starts. Without that,
+   * the count would reset on every press and the verdict could never be reached.
+   */
+  let voiceWordless = 0;
+
+  /**
    * Should the microphone button offer to listen?
    *
    * `canListen` answers "does the browser expose SpeechRecognition", which is
@@ -1461,6 +1503,78 @@
    */
   function canOfferListening() {
     return !voiceInputDead && !(capSummary && !capSummary.canListen);
+  }
+
+  /**
+   * The short form of "why the app is not listening", for the bar and the button.
+   *
+   * Everything the cook reads about a written-off microphone is built from these,
+   * so the two causes can never be told apart in one place and confused in
+   * another.
+   */
+  function noListenShort() {
+    return voiceDeadReason === "service"
+      ? "This browser's speech service is not answering"
+      : "The microphone is not opening";
+  }
+
+  function noListenBar() {
+    return `${noListenShort()} — press 💬 and pick a phrase`;
+  }
+
+  /** The long form, for the spoken and written explanation. */
+  function noListenWhy() {
+    return voiceDeadReason === "service"
+      ? "This browser opens the microphone and its speech service then returns no words at all, " +
+        "so I cannot hear commands here."
+      : "This screen's microphone is not opening, so I cannot listen here.";
+  }
+
+  /**
+   * Did this listen put sound in front of the recogniser and get no words back?
+   *
+   * Both halves come from the platform. `onsoundstart`/`onspeechstart` are the
+   * recogniser reporting that audio reached it, and empty `final`, `interim` and
+   * transcript are it reporting that none of that audio became words. Nothing
+   * here is guessed, which is the whole point: the message this replaces told the
+   * cook to get closer to a microphone whose own events said it was hearing them.
+   */
+  function heardSoundNoWords(session) {
+    return !!(session && session.audio && !session.final && !session.interim);
+  }
+
+  /**
+   * May a listen that ends in the verdict put the phrase list on screen?
+   *
+   * A press is the cook asking for something and deserves the list. The re-arm is
+   * the app acting alone, and a dialog that appears with nobody touching anything
+   * is a hijack — so that path ends the mode and says where the list is, and
+   * leaves it one press away.
+   */
+  function mayOpenList(session) {
+    return !(session && session.rearm);
+  }
+
+  /**
+   * Record a listen that had sound in it and produced no words.
+   *
+   * @returns {boolean} whether this listen settled it — two in a row is a mode
+   *   that cannot work, so it is written off exactly like a microphone that never
+   *   opened, and `onLive` clears it the moment the loop works again.
+   */
+  function noteWordlessListen() {
+    voiceWordless += 1;
+    if (voiceWordless < VOICE_WORDLESS_MAX) return false;
+    voiceInputDead = true;
+    voiceDeadReason = "service";
+    // The verdict is reached in the middle of the cook's press, and that press is
+    // where they are handed the list — so the list has already been offered by the
+    // time this returns. That is what makes the next press a retry rather than a
+    // second showing of the same list: a written-off input that costs two presses
+    // to test again is a written-off input the cook cannot test again.
+    voiceInputRetry = true;
+    applyCapabilityUI();
+    return true;
   }
 
   /**
@@ -1655,9 +1769,10 @@
     if (!capSummary || !capSummary.canListen || voiceInputDead) {
       return {
         state: "error",
-        status: "No microphone on this device",
-        say: "This device has no microphone I can open, so I cannot listen hands-free. " +
-          "On a Fire TV, the remote's Alexa button is the voice input — press 💬 to see what I can do.",
+        status: voiceInputDead ? noListenShort() : "No microphone on this device",
+        say: (voiceInputDead ? noListenWhy() : "This device has no microphone I can open.") +
+          " So I cannot listen hands-free. On a Fire TV, the remote's Alexa button is the " +
+          "voice input — press 💬 to see what I can do.",
       };
     }
     handsFreeMisses = 0;
@@ -1678,6 +1793,35 @@
     "no-speech": "I did not hear anything — try again, a little closer to the microphone.",
     "language-not-supported": "This browser has no speech model for that language.",
   };
+
+  /**
+   * The miss that contradicts itself: the recogniser reported sound, and then no
+   * words at all.
+   *
+   * This is the one failure whose message used to accuse the cook of something
+   * the platform had just denied. `no-speech` was answered with "get closer to
+   * the microphone" — on a screen whose own events said audio was arriving — and
+   * the same silence under the ten-second deadline was answered with advice to
+   * say something shorter, which nobody can act on when their words are going
+   * into the recogniser and not coming back out of it.
+   *
+   * Measured on this machine: with the microphone open and real audio playing
+   * through the speakers, both engines report `soundstart` and `speechstart`,
+   * and then one returns an empty result and the other returns nothing at all.
+   * So what is said here is only what was observed — sound went in, no words came
+   * out, and the part that turns the first into the second is the browser's
+   * speech service, the one component of this loop the app does not own and the
+   * one a cook has no way to see.
+   */
+  const WORDLESS_BAR = "I heard something but no words came back — 💬 for the list";
+
+  function wordlessWhy() {
+    return "I opened the microphone and it reported sound, but not one word came back — " +
+      "no words at all, not even a half-finished one. This screen sends what the microphone " +
+      "hears to the browser's speech service, and that is the part that has gone quiet. " +
+      "Press 💬 to see the phrases I know and pick one, or press 🎙 and try again with a " +
+      "short one, like “next step”.";
+  }
 
   /**
    * The failures that mean "not here, not now" rather than "try again".
@@ -1986,7 +2130,11 @@
     if (voiceInputDead) {
       if (micLabel) micLabel.textContent = "Phrases";
       if (micIcon) micIcon.textContent = "📋";
-      if (micBtn) micBtn.title = "This screen's microphone is not opening — pick a phrase to run instead";
+      if (micBtn) {
+        micBtn.title = voiceDeadReason === "service"
+          ? "This browser's speech service is not answering — pick a phrase to run instead"
+          : "This screen's microphone is not opening — pick a phrase to run instead";
+      }
     }
 
     // Voices can arrive after first paint, so the capability line has to be
@@ -2027,9 +2175,11 @@
     }
     // The microphone has been tried and did not open. "This screen cannot
     // listen" was true but useless; naming the reason and pointing at the thing
-    // that does work is the same honesty with somewhere to go.
+    // that does work is the same honesty with somewhere to go — and the reason
+    // is the one that was actually observed, because a cook whose speech service
+    // is the missing part should not be sent to check their microphone.
     if (voiceInputDead) {
-      return "The microphone is not opening here — press 💬 and pick a phrase";
+      return noListenBar();
     }
     if (spoken) return "This screen cannot listen — use the remote's Alexa button";
     return "No voice in or out here — press 💬 to see what you can say";
@@ -2053,11 +2203,22 @@
       },
       {
         name: "Voice input in this screen",
-        detail: recognition.supported
-          ? "SpeechRecognition is available"
-          : "no SpeechRecognition — talk through the remote's Alexa button",
-        state: recognition.supported ? "ok" : "warn",
-        label: recognition.supported ? "works" : "unavailable",
+        // The measured answer outranks the assumed one. `recognition.supported`
+        // is a fact about the browser — the constructor is there — and it stays
+        // true on a screen whose recogniser has been caught either never opening
+        // or answering with no words, which is why the button had to be
+        // relabelled in the first place. Reporting "works" from the API's
+        // existence after the app has watched it fail is the same lie in a
+        // second place.
+        detail: voiceInputDead
+          ? voiceDeadReason === "service"
+            ? "the recogniser opened and its speech service returned no words"
+            : "the recogniser was opened and never reported that it started"
+          : recognition.supported
+            ? "SpeechRecognition is available"
+            : "no SpeechRecognition — talk through the remote's Alexa button",
+        state: voiceInputDead ? "bad" : (recognition.supported ? "ok" : "warn"),
+        label: voiceInputDead ? "not working" : (recognition.supported ? "works" : "unavailable"),
       },
       {
         name: "Remote / arrow keys",
@@ -2202,6 +2363,11 @@
     // success means a command the app did not understand still counts as the
     // mode doing its job — the microphone was fine, the phrase was not.
     handsFreeMisses = 0;
+    // Words came back, so the loop works — microphone, speech service, and out
+    // the other side. That is the only thing that clears the count of listens
+    // which produced none, and it is the right one: a recogniser that starts is
+    // not evidence about a recogniser that answers.
+    voiceWordless = 0;
     logTurn("you", said);
     setVoiceState("thinking", `“${said}” — thinking…`);
     setTimeout(() => respond(said), 180);
@@ -2629,13 +2795,13 @@
     answer({
       state: "error",
       status: showList
-        ? "The microphone is not opening — pick a phrase instead"
-        : "The microphone is not opening — hands-free is off",
-      say: "This screen's microphone is not opening, so I cannot listen here. " +
+        ? `${noListenShort()} — pick a phrase instead`
+        : `${noListenShort()} — hands-free is off`,
+      say: noListenWhy() +
         (showList
-          ? "I have opened the list of things you can say — choose one to run it. " +
+          ? " I have opened the list of things you can say — choose one to run it. " +
             "To have me try the microphone again, close this list and press once more."
-          : "Press 💬 for the list of things you can say, or press the microphone to try once more.") +
+          : " Press 💬 for the list of things you can say, or press the microphone to try once more.") +
         ended,
     });
   }
@@ -2725,7 +2891,14 @@
 
     const recognition = new SR();
     voiceRecognition = recognition;
-    voiceSession = { final: "", interim: "", handled: false, live: false };
+    voiceSession = {
+      final: "", interim: "", handled: false, live: false, audio: false,
+      // Whether this listen is the cook's press or the app's own re-open. It
+      // decides one thing, and only when the listen ends in the verdict: a press
+      // may open the list, and a re-arm may not, because a dialog that appears
+      // with nobody touching anything is a hijack. See `offerPhrasesInstead`.
+      rearm: !!(options && options.rearm),
+    };
 
     // The cook's language, not a hard-coded one. This was the whole reason a
     // Chinese speaker was never understood: the microphone was listening for
@@ -2758,8 +2931,20 @@
     };
     recognition.onstart = onLive;
     recognition.onaudiostart = onLive;
-    recognition.onspeechstart = onLive;
-    recognition.onsoundstart = onLive;
+
+    // These two answer a different question from `onLive`, and they are the
+    // reason a miss can now be described instead of blamed. `onstart` and
+    // `onaudiostart` say the microphone opened; `onsoundstart` and
+    // `onspeechstart` say sound reached it. A recogniser reports that whatever
+    // its service does next, which is what lets the app tell "you were quiet"
+    // apart from "your words went in and nothing came out" — two failures a cook
+    // experiences identically and can only fix if they are named separately.
+    const onSound = () => {
+      if (voiceSession) voiceSession.audio = true;
+      onLive();
+    };
+    recognition.onspeechstart = onSound;
+    recognition.onsoundstart = onSound;
 
     recognition.onresult = event => {
       // A session that has already been answered, given up on, or stopped must
@@ -2791,12 +2976,6 @@
         return;
       }
       if (voiceSession) voiceSession.handled = true;
-      // "No speech" is the recogniser reporting that it opened and heard nothing.
-      // That is the same evidence the empty end below acts on, so it gets the
-      // same one test: before blaming the cook's silence, rule out a language
-      // nobody chose. Checked here rather than in the generic error path because
-      // it is the only code in this list that is a miss rather than a defect.
-      if (code === "no-speech" && probeOtherLanguage("quiet") === "probe") return;
       // Not every error means the same thing. `not-allowed` is the cook's to fix
       // — the permission prompt — and `no-speech` is just silence, which is a
       // miss and not a defect. The rest are structural: this screen cannot
@@ -2805,14 +2984,35 @@
       // second press in `toggleVoice` is what keeps that from being permanent.
       if (UNUSABLE_RECOGNITION.indexOf(code) !== -1) {
         voiceInputDead = true;
+        // Which part is missing travels with the verdict. `audio-capture` is the
+        // platform saying there is no capture device; `network` and
+        // `service-not-allowed` are it saying there is one and the speech
+        // service is what it cannot get to. Both used to be reported as "the
+        // microphone is not opening", which is only true of the first.
+        voiceDeadReason = code === "audio-capture" ? "mic" : "service";
         voiceInputRetry = false;
         applyCapabilityUI();
       }
-      const line = RECOGNITION_ERRORS[code] || `This browser's speech recogniser failed (${code}).`;
+      // A recogniser listening for speech has two ways to report that it found
+      // none. One is honest silence. The other is this — reporting that it heard
+      // nothing *after* telling us that sound reached it — and the app must not
+      // answer the second with advice about microphone distance, which is what it
+      // knows least about. Two of those in a row is a listen that cannot work,
+      // and it is written off before the language is guessed at again: a probe
+      // would send the cook back to a microphone that has just twice proved that
+      // nothing comes out of it.
+      const wordless = code === "no-speech" && heardSoundNoWords(voiceSession);
+      const settled = wordless && noteWordlessListen();
+      if (!settled && code === "no-speech" && probeOtherLanguage("quiet") === "probe") return;
+      if (settled) { offerPhrasesInstead(mayOpenList(voiceSession)); return; }
+      const line = wordless ? WORDLESS_BAR
+        : (RECOGNITION_ERRORS[code] || `This browser's speech recogniser failed (${code}).`);
       answer({
         state: "error",
         status: line,
-        say: `${line} Use the remote, or press 💬 to see what I can do.${handsFreeMissed()}`,
+        say: (wordless
+          ? wordlessWhy()
+          : `${line} Use the remote, or press 💬 to see what I can do.`) + handsFreeMissed(),
       });
     };
 
@@ -2827,16 +3027,25 @@
       const heard = (session.final || session.interim).trim();
       if (heard) { interpret(heard); return; }
       session.handled = true;
-      // Nothing came back at all. Before concluding the cook said nothing worth
-      // acting on, rule out the one cause they cannot see from here: a
-      // recogniser opened in a language nobody chose.
-      const probe = probeOtherLanguage("quiet");
+      // Nothing came back at all. There are two ways for that to happen and they
+      // are not the same failure. A quiet cook is a miss. Sound reaching the
+      // recogniser and no words coming out of it is the recogniser catching
+      // itself out, and it is the one miss that has nothing to do with the cook —
+      // so it is counted, and the count can end the mode. Both are settled before
+      // the language is guessed at, because a probe hands the cook back to a
+      // microphone that has just proved nothing comes out of it.
+      const wordless = heardSoundNoWords(session);
+      const settled = wordless && noteWordlessListen();
+      const probe = settled ? null : probeOtherLanguage("quiet");
       if (probe === "probe") return;
+      if (settled) { offerPhrasesInstead(mayOpenList(session)); return; }
+      const triedBoth = probe === "exhausted" ? " I tried both languages, so it is not that." : "";
       answer({
         state: "error",
-        status: "I didn't catch that",
-        say: "I did not make out anything. Try again, or press 💬 to see what I can do." +
-          (probe === "exhausted" ? " I tried both languages, so it is not that." : "") +
+        status: wordless ? WORDLESS_BAR : "I didn't catch that",
+        say: (wordless
+          ? wordlessWhy() + triedBoth
+          : "I did not make out anything. Try again, or press 💬 to see what I can do." + triedBoth) +
           handsFreeMissed(),
       });
     };
@@ -2851,10 +3060,22 @@
       // and the microphone heard the answer and asked again. That is the loop
       // a cook hears as "it repeats forever".
       stopVoiceRecognition();
+      // Ten seconds is two different failures wearing the same clock. A sentence
+      // that was simply long gets told to be shorter. A speech service that took
+      // the audio and returned nothing — not a word, not even a half-finished one
+      // — cannot be helped by saying less, because nothing it says is arriving.
+      // Sound having reached the recogniser is what tells them apart, and it is
+      // the platform's own report rather than a guess.
+      const wordless = heardSoundNoWords(voiceSession);
+      const settled = wordless && noteWordlessListen();
+      if (settled) { offerPhrasesInstead(mayOpenList(voiceSession)); return; }
       answer({
         state: "error",
-        status: "That took too long — I stopped listening",
-        say: "That took too long, so I stopped listening. Try a shorter command, like “next step”." + handsFreeMissed(),
+        status: wordless ? WORDLESS_BAR : "That took too long — I stopped listening",
+        say: (wordless
+          ? wordlessWhy() + " I have stopped listening."
+          : "That took too long, so I stopped listening. Try a shorter command, like “next step”.") +
+          handsFreeMissed(),
       });
     }
 
@@ -2878,6 +3099,11 @@
       // the two apart — so it is remembered and the button stops offering the
       // one thing this screen has proved it cannot do. `onLive` clears it.
       voiceInputDead = true;
+      // This shape of failure is the microphone, not the service: nothing at all
+      // came back, which means the recogniser never opened. The opposite shape —
+      // it opened and returned no words — is recorded as "service" instead, and
+      // the two are never reported as each other.
+      voiceDeadReason = "mic";
       voiceInputRetry = false;
       applyCapabilityUI();
       answer({
