@@ -574,6 +574,21 @@
     return table[scope] || table.always;
   }
 
+  /**
+   * The other language this table answers in.
+   *
+   * A recogniser is opened in exactly one language, so when a cook's language was
+   * never chosen — only guessed from the browser — trying the other one is the
+   * only remaining test. The caller asks here rather than keeping its own copy of
+   * which languages exist, because a second copy is how a switcher ends up
+   * offering a language the table has no phrases for.
+   */
+  function otherLang(id) {
+    const at = LANGS.findIndex(l => l.id === id);
+    if (at === -1) return LANGS[0].id;
+    return LANGS[(at + 1) % LANGS.length].id;
+  }
+
   return {
     COMMANDS,
     SCOPE_LABEL,
@@ -583,6 +598,7 @@
     findCommand,
     help,
     scopeLabel,
+    otherLang,
     normalize,
     findRecipe,
     findAllergen,

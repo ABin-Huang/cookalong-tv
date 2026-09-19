@@ -310,3 +310,50 @@ test("a job carries its goal, so the app does not need a second registration", (
       `${command.id} is taught but carries no goal for the app to run`);
   });
 });
+
+test("the other language is the one a probe may move to, and it round-trips", () => {
+  // The app opens one recogniser in one language, so when a cook never chose a
+  // language and nothing comes back, trying the other one is the only test left.
+  // It has to be a permutation of the table's own list: a switcher that offers a
+  // language the table has no phrases for teaches phrases that cannot work, and
+  // a probe that cannot get back to where it started strands the cook.
+  assert.strictEqual(VC.otherLang("en-US"), "zh-CN");
+  assert.strictEqual(VC.otherLang("zh-CN"), "en-US");
+  assert.strictEqual(VC.otherLang(VC.otherLang("en-US")), "en-US");
+
+  VC.LANGS.forEach(lang => {
+    const other = VC.otherLang(lang.id);
+    assert.notStrictEqual(other, lang.id, `${lang.id} is its own other language`);
+    assert.ok(VC.LANGS.some(l => l.id === other), `${lang.id} switches to unknown "${other}"`);
+    // Whatever a probe moves to has to be a language the table can actually
+    // answer in — every command taught in it, not just the table's own list.
+    assert.strictEqual(VC.help(other).length, VC.COMMANDS.length,
+      `${other} is offered but does not teach the whole table`);
+  });
+
+  // An unknown id must land on a real language rather than undefined, because
+  // the caller assigns the result straight to the recogniser's `lang`.
+  assert.ok(VC.LANGS.some(l => l.id === VC.otherLang("fr-FR")));
+});
+
+test("switching languages changes the phrases taught, not the phrases answered", () => {
+  // The asymmetry that makes the bilingual table work: `help` follows the cook's
+  // language, but `findCommand` answers both at once. A single recognition
+  // session is still one language — this is what makes switching cheap, and it
+  // is why a wrong language shows up as nothing coming back rather than as a
+  // half-understood command.
+  const en = VC.help("en-US").map(r => r.say);
+  const cn = VC.help("zh-CN").map(r => r.say);
+  assert.notDeepStrictEqual(en, cn, "the two languages must not teach the same phrases");
+  assert.strictEqual(en.length, cn.length);
+
+  cn.forEach(phrase => {
+    assert.ok(matchId(phrase), `"${phrase}" is taught in Chinese but reaches no command`);
+  });
+  // And each language's own example still reaches its own command in the other
+  // language's session — the matcher is not switched off by the UI language.
+  const cnStep = VC.COMMANDS.find(c => c.id === "next-step").cn.say;
+  const enStep = VC.COMMANDS.find(c => c.id === "next-step").say;
+  assert.strictEqual(matchId(cnStep), "next-step");
+  assert.strictEqual(matchId(enStep), "next-step");
+});
