@@ -114,7 +114,11 @@ back, say *"keep cooking"*, and you are back on step 3 of 7 with your swaps
 still applied, your diet and allergies intact, and your fridge still full.
 
 **It speaks the cook's language.** Not a hard-coded one: the app listens in
-Chinese and answers in Chinese, and the taught command list switches with it.
+Chinese and answers in Chinese, and the taught command list switches with it. And
+because following the browser is only a guess, the language is on the top bar
+where a cook can see it, the failure line says what it heard *and* what it was
+listening for, and a guess that comes back empty is tested once against the other
+language before anything is blamed on the microphone.
 
 ### How we built it
 
@@ -257,8 +261,8 @@ better demo).
 | 1:25–1:45 | Ask: **"sort out dinner"**. The conductor answers with a dish, one shopping line, and the longest wait. It asks one question. Answer **"yes"** — the recipe opens on step 1 and the list fills in. | "And this one means *decide for me*. The agent composes the match, the clock and the shopping in a single turn: here's the dish, here's what to buy, here's your longest wait. Then it stops and asks. Opening a recipe is free; editing your shopping list isn't — so it waits for a yes." |
 | 1:45–2:05 | Press **🙌 Hands-free**. The button turns green. Then **never touch anything again** — say "next step", "next step", "set a timer for 18 minutes". Each answer is spoken, and the mic re-opens on its own. | "Now the part that makes this a kitchen app. Hands-free. The microphone re-opens itself after every answer — watch, I never touch the remote again. And if it really can't hear me twice in a row, it turns itself off and tells me, instead of retrying forever." |
 | 2:05–2:25 | Cut to a **new session**: reopen the app, say **"keep cooking"**. It lands back on step 3 of 7 with the swap still applied. | "Here's the thing nobody else solves. An Alexa session ends every time you stop talking — and cooking is nothing but pauses. Ask it to keep cooking and you're back where you were: same step, same swap, same diet, and it still knows what's in your fridge." |
-| 2:25–2:40 | Switch language to **中文**; the taught command list switches and a Chinese command moves the step. | "It also listens in your language, not a hard-coded one — the command list and the microphone switch together." |
-| 2:40–2:45 | Terminal: `npm test` → **327 pass**, `npm run verify:browser` → **72/72**, `npm run verify:voice` → **11/11**. | "327 unit tests, 72 checks driven through a real browser at TV resolution, and 11 more that drive a real speech recogniser — including a deliberately broken one, to prove the app notices when the microphone never opens. We didn't just build the demo — we built the thing that proves the demo." |
+| 2:25–2:40 | Switch language with the **🌐 chip on the top bar** — one press, no dialog. The taught command list switches and a Chinese command moves the step. | "It also listens in your language, not a hard-coded one — the command list and the microphone switch together, from the bar, in one press. And when the language was only a guess, it tests the guess itself before it blames me for it." |
+| 2:40–2:45 | Terminal: `npm test` → **329 pass**, `npm run verify:browser` → **86/86**, `npm run verify:voice` → **13/13**. | "329 unit tests, 86 checks driven through a real browser at TV resolution, and 13 that drive a real speech recogniser — including a deliberately broken one, to prove the app notices when the microphone never opens. We didn't just build the demo — we built the thing that proves the demo." |
 
 **Filming notes**
 

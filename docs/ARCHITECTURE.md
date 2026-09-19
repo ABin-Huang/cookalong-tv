@@ -493,6 +493,10 @@ either listens or teaches had to read from it:
 - **The switch takes the teaching with it.** Changing the language re-renders
   both command lists and the resting line, because a Chinese microphone with an
   English cheatsheet is the same lie as an advertised command with no handler.
+  It is written in two places — the chip on the top bar and the button inside the
+  conversation panel — from one function, because "which language is it in" is a
+  single fact and a switcher whose two copies can disagree teaches the wrong
+  phrases.
 - **The recipes carry Chinese names.** The dish command matches the whole name,
   so without them "cook tomato basil pasta" would have had no Chinese equivalent —
   the headline command, unreachable in the language the cook chose. They live in
@@ -502,6 +506,39 @@ either listens or teaches had to read from it:
   catalogue, the steps and the replies are English, so the app answers in English
   while being *driven* in either language — which is coherent with what is on
   screen. That boundary is deliberate, not an oversight.
+
+### The guess is tested, not trusted
+
+Following the browser is a guess, and the first version of it was wrong in the
+worst available way: on a Chinese-defaulted machine an English sentence came back
+as nothing at all, so the app answered "I didn't catch that" about a phrase it had
+never heard. Repeating it changed nothing, because a recogniser opened in the
+wrong language produces silence every time.
+
+Three things were wrong at once, and each needed its own fix:
+
+- **The setting that decides everything was invisible.** It lived three taps deep
+  inside the conversation panel, so a cook whose English was going nowhere had no
+  way to discover the microphone was listening for Chinese. It is now a chip on
+  the top bar — still named on a 720p screen, in two characters if it must.
+- **The failure named neither of the two facts that matter.** "I didn't catch
+  that" cannot be distinguished from "I heard you badly" and hides the cause. The
+  bar now says what was heard *and* which language it was listening in, and the
+  prompt while listening names the language too.
+- **Nothing tested the guess.** `SpeechRecognition` cannot listen in two languages
+  at once, so when nothing comes back at all and the language was never chosen,
+  the app moves the microphone to the other one, says so, and asks for the phrase
+  once more. If that comes back empty too it puts the first one back and delivers
+  the verdict it could not deliver before — the microphone is the problem, with
+  the language ruled out rather than assumed. A language the cook picked by hand
+  is never tested, and a phrase that merely did not match never triggers the
+  probe: words came back, so the language was good enough to hear them.
+
+Two properties make that a search rather than a loop. It remembers where it
+started, so it always ends where it began, and it is never written to storage —
+a probe that has not yet carried a real command has proved nothing, and one press
+must not quietly rewrite the language the next page load starts in. It is saved by
+`respond`, and only once it has answered something.
 
 The harness asserts the rule rather than the value: the microphone opens in the
 language the button shows, switching changes the taught list in the same breath,

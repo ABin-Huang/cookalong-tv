@@ -171,11 +171,22 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   said into it. A Chinese-speaking cook was therefore not *partly* understood,
   they were not understood at all, and every phrase the screen taught them was a
   phrase that could not work. The microphone now opens in the browser's own
-  language, the command table answers in both, and **💬 → 🎙** switches between
-  them — taking the taught list with it, because teaching English phrases to a
-  Chinese microphone is how a working feature looks broken. Every command carries
-  its Chinese phrase, its Chinese description, and Chinese examples that are
-  tested the same way the English ones are.
+  language, the command table answers in both, and **🌐 on the top bar** switches
+  between them — taking the taught list with it, because teaching English phrases
+  to a Chinese microphone is how a working feature looks broken. Every command
+  carries its Chinese phrase, its Chinese description, and Chinese examples that
+  are tested the same way the English ones are.
+- **A guessed language is tested, not trusted** — the default follows the
+  browser, which is a guess, so on a Chinese machine an English sentence came
+  back as nothing at all and the screen blamed the phrase. Forever: a recogniser
+  opened in a language nobody chose produces silence every single time, and no
+  amount of saying it again fixes that. When nothing comes back at all, the app
+  now spends one press on the only test available to it — it moves the
+  microphone to the other language and says so — and if that comes back empty too
+  it puts the first one back and concludes the microphone is the problem, having
+  ruled the language out rather than assumed it. A language the cook picked by
+  hand is never second-guessed. Both halves of the failure are now said out
+  loud: what was heard, and which language it was listening in.
 - **The microphone is closed before the app speaks** — the app used to give up on
   a microphone that never opened by forgetting the recogniser rather than closing
   it. The recogniser kept running, kept returning results, and each result was
@@ -356,7 +367,7 @@ the parts a person would actually notice are checked in a real browser, on deman
 
 ```bash
 npm start                 # terminal 1 — serves public/ on :8080
-npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 72 checks
+npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 86 checks
 npm run verify:voice      # terminal 2 — the voice layer, against a real recogniser
 ```
 
@@ -368,7 +379,18 @@ that never really opens has to end in words *and* hand over the list that does
 work, a listen ended by the timeout has to leave the button usable, the transcript
 has to show both sides of the exchange, the help list on screen has to be the
 command table rather than a copy of it, and the line telling a new cook how to talk
-has to survive a 1280×720 screen uncut.
+has to survive a 1280×720 screen — measured against what the sentence actually
+needs, in both hands-free states, at one row.
+
+That last check is worth a note, because for a while it passed while the line was
+being cut off. It read `scrollWidth`, and on a `nowrap` element with
+`text-overflow: ellipsis` that reports the width the *layout chose*, not the width
+the sentence needs — so a `max-width: 52ch` cap that truncated the Chinese resting
+line from 429px to 351px on every 720p screen was invisible to the check that
+exists to catch it. It now measures a clone of the line with the cap removed.
+There is one more check that exists only because the fix for it needed one: the
+language chip on the top bar is a seventh control, and a bar that has to fit seven
+controls on 1280px is a layout regression waiting to happen.
 
 `verify:voice` exists because the checks above are not enough for voice, and the
 reason is worth stating plainly. Every voice test in this repo used to replace
