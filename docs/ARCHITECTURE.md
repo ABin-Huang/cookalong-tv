@@ -617,6 +617,36 @@ stops being a microphone button: it says *Phrases* and opens the selectable
 command list, which is the only input left. See *The part that cannot be tested in
 Node* above for how it is measured, cleared, and tested.
 
+There is a fifth state, and it took a challenge from the person using the app to
+find it: the recogniser opens, reports sound, and *the speech service returns no
+words*. It looks nothing like the fourth from the outside — the microphone works
+perfectly — but a cook experiences it identically, and the two need opposite
+answers. The events make the difference measurable rather than inferred, because
+both halves are the platform's own report:
+
+| What the recogniser reported | What is actually wrong | What the app says |
+|---|---|---|
+| nothing at all, past the deadline | the microphone never opened | the microphone is not opening — here is the list |
+| sound, and words | nothing; it heard the cook | answers the command, or repeats the transcript it misheard |
+| sound, and no words at all | the speech service answered with nothing | it heard something and got no words — the service has gone quiet |
+| silence (`no-speech`, nothing heard) | the cook did not speak | it did not catch that, try again |
+
+The third row is the one worth stating precisely, because "no words at all" is
+`onsoundstart`/`onspeechstart` having fired with `final`, `interim` *and* the
+transcript all still empty — not a heuristic about how much speech should have been
+recognised. Nothing in it is guessed, which is the point: the message this replaced
+told the cook to move closer to a microphone whose own events said it was hearing
+them. Two such listens in a row mark the input dead with `voiceDeadReason ===
+"service"`, so the button hands over the phrase list while naming the service
+rather than the hardware, and the press after that opens the microphone again.
+
+The distinction also has to travel: `noListenShort()`, `noListenBar()` and
+`noListenWhy()` are the only places either reason is put into words, so the bar,
+the button's tooltip, the hands-free refusal and the Device check cannot disagree
+about which half is missing. The Device check reads the *measurement* rather than
+the API: reporting "SpeechRecognition is available — works" from the constructor's
+existence, after the app has watched it fail, is the same lie in a second place.
+
 This is deliberately not user-agent sniffing: the same Silk build behaves
 differently across device generations, and a string is a guess where a
 measurement is available. `looksLikeTv()` exists only to annotate the report.

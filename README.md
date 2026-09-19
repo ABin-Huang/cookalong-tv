@@ -139,6 +139,20 @@ Built for the **Build, Ship, Shape: Amazon Developer Hackathon**.
   There is no path left that leaves the screen claiming to listen — including
   the timeout paths themselves, which clear the session rather than trusting
   the `end` event to arrive.
+- **"I heard you and got no words" is not the same as "you were quiet"** — the
+  two failures a cook experiences identically, and they used to get the same
+  answer. `no-speech` was reported as "try again, a little closer to the
+  microphone", which is advice about the one part of the loop the platform had
+  just said was working: `onsoundstart` and `onspeechstart` are the recogniser
+  reporting that audio reached it. What was measured on this machine, with the
+  microphone open and real speech played into it, is both engines reporting
+  sound and then one returning an empty result and the other returning nothing
+  at all. So the message now says exactly that, names the browser's speech
+  service as the part that went quiet, and never sends anyone to check a
+  microphone that is demonstrably hearing them. Two such listens in a row
+  write the microphone off — naming the service as the missing half rather than
+  the hardware — and hand over the phrase list, and the press after that opens
+  the microphone again, because a measurement is not a sentence.
 - **The answer is on screen even when the voice is not** — every reply goes
   through one funnel that writes the top bar, the transcript and the voice
   together. Before, a reply was handed to `speak()` and on a Fire TV — which
@@ -367,7 +381,7 @@ the parts a person would actually notice are checked in a real browser, on deman
 
 ```bash
 npm start                 # terminal 1 — serves public/ on :8080
-npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 86 checks
+npm run verify:browser    # terminal 2 — drives Chromium at 1920x1080, 93 checks
 npm run verify:voice      # terminal 2 — the voice layer, against a real recogniser
 ```
 
@@ -405,6 +419,23 @@ starting — and then checking that the app notices, stops claiming to listen, s
 offering a microphone it has proved it does not have, and hands over the list of
 phrases that can be selected instead. It also checks barge-in, and that a browser
 whose recogniser *does* work is never mistaken for a dead one.
+
+It injects a second failure, because the first one is not the one a cook with a
+working microphone hits: a recogniser that opens, reports sound, and whose speech
+service then returns no words — in both shapes this machine was measured
+producing, an empty result and no result at all. That is the failure that used to
+be answered with advice about microphone distance, so what the harness asserts is
+that the app describes what it saw, names the service, and does not offer to
+listen again until the cook asks it to.
+
+One limit is worth being honest about. This harness can drive transcription
+through a real recogniser, but it cannot put a *human* into the microphone: the
+only sound this machine can synthesise comes out of its own speakers, and a laptop
+microphone array is engineered to reject exactly that — the same echo cancellation
+the app relies on to avoid answering itself. Real speech into a real microphone is
+therefore checked by hand, and what is asserted automatically is everything on
+either side of the transcription: that the recogniser opened, that sound reached
+it, and what the screen says when no words come back.
 
 Playwright is deliberately not a dependency — CI has no browser, and a test that
 cannot run is worse than no test. See `docs/DEV_SETUP.md`.
